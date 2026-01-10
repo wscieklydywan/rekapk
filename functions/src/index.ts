@@ -35,20 +35,31 @@ export const handleNewMessagePush = functions
     const { chatId } = context.params;
 
     try {
-      // Get chat document and all admin users simultaneously
-      const [chatDoc, adminsSnapshot] = await Promise.all([
-        db.collection("chats").doc(chatId).get(),
-        db.collection("users").where("role", "==", "admin").get(),
-      ]);
+      const chatDoc = await db.collection("chats").doc(chatId).get();
 
-      if (!chatDoc.exists || adminsSnapshot.empty) {
-        functions.logger.log(`Chat ${chatId} or admins not found.`);
+      if (!chatDoc.exists) {
+        functions.logger.log(`Chat ${chatId} not found.`);
         return null;
       }
 
       const chat = chatDoc.data()!;
-      const assignedAdminId = chat.assignedAdminId || null; // Ensure it's null if undefined
 
+      // 🔥 KEY CONDITION: If an admin is actively viewing the chat, abort all push notifications.
+      if (chat.activeAdminId) {
+        functions.logger.log(`Admin ${chat.activeAdminId} is active in chat ${chatId}. Push notifications aborted.`);
+        return null;
+      }
+
+      // --- If we are here, no admin is active. Proceed with push logic. ---
+
+      const adminsSnapshot = await db.collection("users").where("role", "==", "admin").get();
+
+      if (adminsSnapshot.empty) {
+        functions.logger.log("No admins found to send notifications to.");
+        return null;
+      }
+
+      const assignedAdminId = chat.assignedAdminId || null; 
       const messagesToSend: object[] = [];
       const messageBody = message.text.length > 100 ? message.text.slice(0, 97) + "…" : message.text;
 
@@ -56,25 +67,19 @@ export const handleNewMessagePush = functions
         const adminData = adminDoc.data();
         const adminId = adminDoc.id;
 
-        // Skip admin if they are active in the app or have no push token
         if (adminData.isForeground === true || !adminData.pushToken) {
           continue;
         }
 
-        // Determine admin's notification preference ('assigned' is the default)
         const notificationMode = adminData.notificationSettings?.mode ?? 'assigned';
 
         let shouldReceivePush = false;
 
-        // RULE 1: Admin with 'all' mode gets all notifications
         if (notificationMode === 'all') {
           shouldReceivePush = true;
         } 
-        // RULE 2: Admin with 'assigned' mode gets pushes for their chats or unassigned chats
         else if (notificationMode === 'assigned') {
-          if (!assignedAdminId) { // Unassigned chat
-            shouldReceivePush = true;
-          } else if (assignedAdminId === adminId) { // Chat is assigned to this admin
+          if (!assignedAdminId || assignedAdminId === adminId) { 
             shouldReceivePush = true;
           }
         }
@@ -94,7 +99,7 @@ export const handleNewMessagePush = functions
 
       if (messagesToSend.length > 0) {
         await sendExpoPushes(messagesToSend);
-        functions.logger.log(`Sent ${messagesToSend.length} push notifications based on soft-assignment rules.`);
+        functions.logger.log(`Sent ${messagesToSend.length} push notifications for chat ${chatId}.`);
       }
 
       return null;
@@ -104,7 +109,7 @@ export const handleNewMessagePush = functions
     }
   });
 
-// The 'notifyAdminsOnNewForm' function remains unchanged as it has simpler logic
+// The 'notifyAdminsOnNewForm' function remains unchanged.
 export const notifyAdminsOnNewForm = functions
   .region("europe-west1")
   .firestore.document("contact_forms/{formId}/messages/{messageId}")

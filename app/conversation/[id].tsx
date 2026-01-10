@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, useColorScheme, KeyboardAvoidingView, Platform, ActivityIndicator, SafeAreaView, Modal } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, useColorScheme, KeyboardAvoidingView, Platform, ActivityIndicator, SafeAreaView, Modal, AppState } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { collection, onSnapshot, query, orderBy, doc, updateDoc, Timestamp, writeBatch, getDoc, increment } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
@@ -39,22 +39,14 @@ const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins 
         return (ts1.toMillis() - ts2.toMillis()) / (1000 * 60);
     };
     
-    // Corrected logic for bubble grouping:
-    // isFirstInGroup: true if current message starts a new group from the same sender (or a new sender)
     const isFirstInGroup = !prevMessage || prevMessage.sender !== message.sender || (message.sender === 'admin' && prevMessage.adminId !== message.adminId) || getMinutesDiff(prevMessage.createdAt, message.createdAt) > GROUP_THRESHOLD_MINUTES;
-    // isLastInGroup: true if current message ends a group from the same sender
     const isLastInGroup = !nextMessage || nextMessage.sender !== message.sender || (message.sender === 'admin' && nextMessage.adminId !== message.adminId) || getMinutesDiff(message.createdAt, nextMessage.createdAt) > GROUP_THRESHOLD_MINUTES;
     const isSolo = isFirstInGroup && isLastInGroup;
 
-    // Corrected logic for displaying admin name/tag based on user's requirements:
-    // Show admin name only if it's an admin message AND
-    //   - it's the chronologically latest message (in an inverted list, meaning it's the first in a normal chronological view), OR
-    //   - the chronologically newer message (nextMessage) was not from an admin, OR
-    //   - the chronologically newer message (nextMessage) was from a *different* admin.
     const showAdminName = isMyMessage && message.adminId && (
-        !nextMessage || // If it's the chronologically latest message (and it's an admin message)
-        nextMessage.sender !== 'admin' || // OR if the chronologically newer message was not from an admin
-        nextMessage.adminId !== message.adminId // OR if the chronologically newer message was from a *different* admin
+        !nextMessage || 
+        nextMessage.sender !== 'admin' || 
+        nextMessage.adminId !== message.adminId
     );
 
     const adminName = showAdminName ? (admins[message.adminId as string]?.displayName || admins[message.adminId as string]?.email) : null;
@@ -150,79 +142,106 @@ const ConversationScreen = () => {
         if (!chatId || !user) return;
 
         const chatDocRef = doc(db, 'chats', chatId);
+        const adminId = user.uid;
 
-        const handleInitialLoadAndReset = async () => {
+        const goOnline = async () => {
+            try {
+                const docSnap = await getDoc(chatDocRef);
+                if (!docSnap.exists()) {
+                    console.log("Chat does not exist, navigating back.");
+                    router.back();
+                    return;
+                }
+                const chatData = docSnap.data() as Chat;
+                if (chatData.activeAdminId !== adminId) {
+                    await updateDoc(chatDocRef, { activeAdminId: adminId });
+                }
+                 if (chatData.adminUnread > 0) {
+                   await updateDoc(chatDocRef, { adminUnread: 0, lastPushAt: null });
+                }
+            } catch (error) {
+                console.error("Error in goOnline:", error);
+            }
+        };
+
+        const goOffline = async () => {
+            try {
+                const docSnap = await getDoc(chatDocRef);
+                if (docSnap.exists() && docSnap.data().activeAdminId === adminId) {
+                    await updateDoc(chatDocRef, { activeAdminId: null });
+                }
+            } catch (error) {
+                console.error("Error in goOffline:", error);
+            }
+        };
+
+        goOnline();
+
+        const handleInitialLoad = async () => {
             try {
                 const docSnap = await getDoc(chatDocRef);
                 if (!docSnap.exists()) {
                     router.back();
                     return;
                 }
-
                 const chatData = { id: docSnap.id, ...docSnap.data() } as Chat;
-                const updates: any = { activeAdminId: user.uid };
-
-                if (!chatData.assignedAdminId) {
-                    updates.assignedAdminId = user.uid;
-                }
-
                 if (chatData.status === 'waiting') {
                     const systemMessageText = "Konsultant dołączył do rozmowy!";
-                    Object.assign(updates, {
+                    const updates = {
                         status: "active",
-                        operatorId: user.uid,
+                        operatorId: adminId,
+                        assignedAdminId: adminId,
                         operatorJoinedAt: Timestamp.now(),
                         lastMessage: systemMessageText,
                         lastMessageSender: 'system',
                         lastMessageTimestamp: Timestamp.now(),
                         lastActivity: Timestamp.now(),
-                    });
-                    
-                    const messagesCol = collection(db, 'chats', chatId, 'messages');
+                    };
                     const batch = writeBatch(db);
                     batch.update(chatDocRef, updates);
+                    const messagesCol = collection(db, 'chats', chatId, 'messages');
                     batch.delete(doc(messagesCol, 'waiting_message'));
                     batch.set(doc(collection(db, 'chats', chatId, 'messages')), { text: systemMessageText, sender: "system", createdAt: Timestamp.now() });
                     await batch.commit();
-
-                } else {
-                     if (chatData.adminUnread > 0) {
-                        updates.adminUnread = 0;
-                        updates.lastPushAt = null;
-                    }
-                    if (Object.keys(updates).length > 1) { // Only update if more than just activeAdminId is present
-                      await updateDoc(chatDocRef, updates);
-                    }
                 }
-
             } catch (error) {
-                console.error("Błąd podczas ładowania i resetowania czatu:", error);
+                console.error("Błąd podczas ładowania czatu:", error);
                 router.back();
             }
         };
 
-        handleInitialLoadAndReset();
+        handleInitialLoad();
 
-        const unsubChat = onSnapshot(chatDocRef, (docSnapshot) => {
-            if (docSnapshot.exists()) {
-                setChat({ id: docSnapshot.id, ...docSnapshot.data() } as Chat);
+        const unsubChat = onSnapshot(chatDocRef, (doc) => {
+            if (doc.exists()) {
+                setChat({ id: doc.id, ...doc.data() } as Chat);
+            } else {
+                router.back();
             }
         });
-        
+
         const messagesQuery = query(collection(db, 'chats', chatId, 'messages'), orderBy('createdAt', 'desc'));
         const unsubMessages = onSnapshot(messagesQuery, (snapshot) => {
             setMessages(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Message)));
             setLoading(false);
         });
+        
+        const handleAppStateChange = (nextAppState: string) => {
+            if (nextAppState !== 'active') {
+                goOffline();
+            }
+        };
+
+        const appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
 
         return () => {
             unsubChat();
             unsubMessages();
-            if (chatRef.current?.activeAdminId === user.uid) {
-                updateDoc(chatDocRef, { activeAdminId: null });
-            }
+            appStateSubscription.remove();
+            goOffline();
         };
-    }, [chatId, router, user]);
+    }, [chatId, user, router]);
+
 
     const handleSend = async () => {
         if (newMessage.trim() === '' || !chatId || !user) return;
@@ -262,6 +281,7 @@ const ConversationScreen = () => {
             batch.update(chatDocRef, {
                 status: "closed",
                 closedBy: "admin",
+                activeAdminId: null, // Ensure activeAdminId is cleared on close
                 lastActivity: Timestamp.now(),
                 lastMessage: systemMessageText,
                 lastMessageSender: 'system',

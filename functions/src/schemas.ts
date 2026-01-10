@@ -27,6 +27,8 @@ export interface Chat {
     openPushSent?: boolean;
     adminPushCount?: number; 
     lastAdminPushAt?: Timestamp;
+    assignedAdminId?: string | null;
+    activeAdminId?: string | null;
 }
 
 export interface Message {
