@@ -6,7 +6,7 @@
   # Use https://search.nixos.org/packages to find packages
   packages = [ pkgs.nodejs_20 ];
   # Sets environment variables in the workspace
-  env = { EXPO_USE_FAST_RESOLVER = 1; };
+  env = { EXPO_USE_FAST_RESOLVER = "1"; };
   idx = {
     # Search for the extensions you want on https://open-vsx.org/ and use "publisher.id"
     extensions = [
@@ -20,11 +20,12 @@
       };
       # Runs when a workspace restarted
       onStart = {
+        # This is a hack to start metro with tunnel and then run android
         android = ''
           echo -e "\033[1;33mWaiting for Android emulator to be ready...\033[0m"
-          # Wait for the device connection command to finish
           adb -s emulator-5554 wait-for-device && \
-          npm run android -- --tunnel
+          (npm start -- --tunnel &) && \
+          npm run android
         '';
       };
     };

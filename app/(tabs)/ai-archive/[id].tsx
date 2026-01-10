@@ -1,0 +1,247 @@
+
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, FlatList, StyleSheet, ActivityIndicator, useColorScheme, InteractionManager } from 'react-native';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
+import { doc, getDoc, collection, query, getDocs, writeBatch, deleteDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { Colors } from '@/constants/theme';
+import { Ionicons } from '@expo/vector-icons';
+import { TouchableOpacity } from 'react-native-gesture-handler';
+import { ConfirmationModal } from '@/components/ConfirmationModal';
+
+// --- TYPY --- 
+interface AiMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: any;
+  isError?: boolean;
+}
+
+interface AiConversationInfo {
+  id: string;
+  userContact: string;
+  messageCount: number;
+}
+
+// --- KOMPONENTY WIADOMOŚCI --- 
+
+const SystemMessage = ({ content, themeColors }: { content: string, themeColors: any }) => (
+    <View style={[styles.systemMessageContainer, { backgroundColor: themeColors.input }]}>
+        <Ionicons name="alert-circle-outline" size={18} color={themeColors.danger} style={{ marginRight: 8 }} />
+        <Text style={[styles.systemMessageText, { color: themeColors.text }]}>{content}</Text>
+    </View>
+);
+
+const MessageBubble = ({ message, themeColors }: { message: AiMessage, themeColors: any }) => {
+    const isUser = message.role === 'user';
+    const avatarIcon = isUser ? 'person-outline' : 'headset-outline';
+    const senderName = isUser ? 'Klient' : 'Konsultant AI';
+
+    return (
+        <View style={[styles.messageRow, { flexDirection: isUser ? 'row-reverse' : 'row' }]}>
+            <View style={[styles.avatar, { backgroundColor: themeColors.input }]}>
+                <Ionicons name={avatarIcon} size={20} color={isUser ? themeColors.tint : themeColors.text} />
+            </View>
+            <View style={styles.messageContentContainer}>
+                <Text style={[styles.senderName, { color: themeColors.textMuted, textAlign: isUser ? 'right' : 'left' }]}>
+                    {senderName}
+                </Text>
+                <View style={[
+                    styles.messageBubble,
+                    isUser 
+                        ? { backgroundColor: themeColors.tint } 
+                        : { backgroundColor: themeColors.input },
+                ]}>
+                     <Text style={[styles.messageText, { color: isUser ? 'white' : themeColors.text }]}>
+                        {message.content}
+                    </Text>
+                </View>
+            </View>
+        </View>
+    );
+};
+
+// --- GŁÓWNY EKRAN --- 
+
+const AiConversationDetailScreen = () => {
+    const theme = useColorScheme() ?? 'light';
+    const themeColors = { ...Colors[theme], danger: '#FF3B30' };
+    const navigation = useNavigation();
+    const router = useRouter();
+    const { id } = useLocalSearchParams<{ id: string }>(); 
+
+    const [conversationInfo, setConversationInfo] = useState<AiConversationInfo | null>(null);
+    const [messages, setMessages] = useState<AiMessage[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [modalConfig, setModalConfig] = useState<any>(null);
+
+    useEffect(() => {
+        navigation.setOptions({ headerShown: false });
+        
+        const task = InteractionManager.runAfterInteractions(() => {
+            const fetchConversation = async () => {
+                if (!id) return;
+                
+                try {
+                    const docRef = doc(db, 'ai_conversations', id);
+                    const docSnap = await getDoc(docRef);
+
+                    if (docSnap.exists()) {
+                        setConversationInfo({ id: docSnap.id, ...docSnap.data() } as AiConversationInfo);
+                    } else {
+                        if (router.canGoBack()) router.back();
+                    }
+
+                    const messagesQuery = query(collection(db, "ai_conversations", id, "messages"));
+                    const messagesSnapshot = await getDocs(messagesQuery);
+                    
+                    let fetchedMessages = messagesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as AiMessage[];
+
+                    fetchedMessages.sort((a, b) => {
+                        const dateA = a.timestamp?.toDate ? a.timestamp.toDate().getTime() : 0;
+                        const dateB = b.timestamp?.toDate ? b.timestamp.toDate().getTime() : 0;
+                        return dateA - dateB;
+                    });
+
+                    setMessages(fetchedMessages);
+
+                } catch (error) {
+                    console.error("Błąd podczas pobierania rozmowy:", error);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            fetchConversation();
+        });
+
+        return () => task.cancel();
+    }, [id]);
+
+    const handleDelete = () => {
+        const performDelete = async () => {
+            if (!id) return;
+            setModalConfig(null);
+            if (router.canGoBack()) router.back();
+
+            try {
+                const messagesRef = collection(db, 'ai_conversations', id, 'messages');
+                const messagesSnapshot = await getDocs(messagesRef);
+                const batch = writeBatch(db);
+                messagesSnapshot.docs.forEach(doc => batch.delete(doc.ref));
+                await batch.commit();
+
+                await deleteDoc(doc(db, 'ai_conversations', id));
+            } catch (error) {
+                console.error("Błąd podczas usuwania rozmowy:", error);
+            }
+        };
+
+        setModalConfig({
+            title: 'Usuń rozmowę',
+            message: 'Czy na pewno chcesz trwale usunąć tę rozmowę i wszystkie jej wiadomości? Tej operacji nie można cofnąć.',
+            confirmText: 'Usuń',
+            cancelText: 'Anuluj', 
+            onConfirm: performDelete,
+            variant: 'destructive'
+        });
+    };
+
+    const contactName = conversationInfo?.userContact || '(bez nazwy)';
+    const messageCount = messages.length;
+
+    return (
+        <View style={{ flex: 1, backgroundColor: themeColors.background }}>
+            {/* Header */}
+            <View style={[styles.headerContainer, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
+                <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+                    <Ionicons name="chevron-back" size={28} color={themeColors.tint} />
+                </TouchableOpacity>
+                <View style={styles.headerTitleContainer}>
+                     <Text style={[styles.headerTitle, { color: themeColors.text }]} numberOfLines={1}>{contactName}</Text>
+                     <Text style={[styles.headerSubtitle, { color: themeColors.textMuted }]}>{loading ? 'Ładowanie...' : `${messageCount} wiadomości`}</Text>
+                </View>
+                <TouchableOpacity onPress={handleDelete} style={styles.deleteButton}>
+                    <Ionicons name="trash-outline" size={24} color={themeColors.danger} />
+                </TouchableOpacity>
+            </View>
+
+            {loading ? (
+                <ActivityIndicator style={{ flex: 1, justifyContent: 'center' }} color={themeColors.tint} />
+            ) : (
+                <FlatList
+                    data={messages}
+                    keyExtractor={(item) => item.id}
+                    renderItem={({ item }) => {
+                        if (item.isError) {
+                            return <SystemMessage content={item.content} themeColors={themeColors} />;
+                        }
+                        return <MessageBubble message={item} themeColors={themeColors} />;
+                    }}
+                    contentContainerStyle={styles.listContentContainer}
+                    ListEmptyComponent={<SystemMessage content="Brak wiadomości w tej rozmowie." themeColors={themeColors} />} 
+                />
+            )}
+            {modalConfig && <ConfirmationModal visible={true} onClose={() => setModalConfig(null)} {...modalConfig} />} 
+        </View>
+    );
+};
+
+// --- STYLE --- 
+
+const styles = StyleSheet.create({
+    headerContainer: {
+        paddingTop: 50,
+        paddingBottom: 10,
+        paddingHorizontal: 15,
+        borderBottomWidth: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    backButton: { marginRight: 10 },
+    headerTitleContainer: { flex: 1 },
+    headerTitle: { fontSize: 18, fontWeight: 'bold' },
+    headerSubtitle: { fontSize: 14, fontWeight: '500' },
+    deleteButton: { padding: 5, marginLeft: 10 },
+    listContentContainer: { paddingVertical: 15, paddingHorizontal: 10 },
+    messageRow: { 
+        marginVertical: 4,
+        alignItems: 'flex-end',
+    },
+    avatar: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginHorizontal: 5,
+    },
+    messageContentContainer: {
+        maxWidth: '80%',
+    },
+    senderName: {
+        fontSize: 12,
+        fontWeight: '500',
+        marginBottom: 4,
+        marginHorizontal: 15,
+    },
+    messageBubble: {
+        paddingHorizontal: 15,
+        paddingVertical: 10,
+        borderRadius: 20,
+    },
+    messageText: { fontSize: 16, lineHeight: 22 },
+    systemMessageContainer: {
+        alignSelf: 'center',
+        marginVertical: 15,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 15,
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    systemMessageText: { fontSize: 13, fontWeight: '500', flexShrink: 1 },
+});
+
+export default AiConversationDetailScreen;

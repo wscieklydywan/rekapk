@@ -1,33 +1,58 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
+import React from 'react';
+import { useColorScheme } from 'react-native';
+import { Tabs } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import ChatTabIcon from '@/components/ChatTabIcon'; // Nowy import
+import FormTabIcon from '@/components/FormTabIcon'; // Nowy import
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
+  const theme = useColorScheme() ?? 'light';
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
+        tabBarActiveTintColor: Colors[theme].tint,
+        tabBarInactiveTintColor: 'gray',
         headerShown: false,
-        tabBarButton: HapticTab,
+        tabBarShowLabel: true,
+        tabBarLabelPosition: 'below-icon',
+        tabBarStyle: {
+          backgroundColor: Colors[theme].background,
+          borderTopColor: Colors[theme].border,
+        },
       }}>
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          title: 'Aktywne czaty',
+          tabBarIcon: (props) => <ChatTabIcon {...props} />,
         }}
       />
       <Tabs.Screen
-        name="explore"
+        name="forms"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+          title: 'Formularze',
+          tabBarIcon: (props) => <FormTabIcon {...props} />,
+        }}
+      />
+      <Tabs.Screen
+        name="ai-archive"
+        options={{
+          title: 'Archiwum AI',
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons name={focused ? "archive" : "archive-outline"} size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Ustawienia',
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons name={focused ? "settings" : "settings-outline"} size={size} color={color} />
+          ),
         }}
       />
     </Tabs>
