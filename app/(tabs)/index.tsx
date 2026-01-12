@@ -1,17 +1,21 @@
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, useColorScheme, Platform, ScrollView } from 'react-native';
-import { useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useChatContext } from '@/app/contexts/ChatProvider';
-import { useAuth } from '@/hooks/useAuth';
-import { Chat, User } from '@/schemas';
+import TabTransition from '@/components/TabTransition';
+import { addAnimationListener, getAnimationsEnabled, removeAnimationListener } from '@/components/animationPreference';
 import { Colors } from '@/constants/theme';
-import { Ionicons } from '@expo/vector-icons';
-import { doc, collection, getDocs, writeBatch } from 'firebase/firestore';
+import { useAuth } from '@/hooks/useAuth';
 import { db } from '@/lib/firebase';
-import { TouchableOpacity, FlatList } from 'react-native-gesture-handler';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing, FadeIn, FadeOut } from 'react-native-reanimated';
+import { Chat, User } from '@/schemas';
+import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { collection, doc, getDocs, writeBatch } from 'firebase/firestore';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AccessibilityInfo, ActivityIndicator, Platform, ScrollView, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { FlatList, TouchableOpacity } from 'react-native-gesture-handler';
+import Animated, { Easing, FadeIn, FadeOut, Layout, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+
 import { ConfirmationModal } from '@/components/ConfirmationModal';
+import { showMessage } from 'react-native-flash-message';
 
 const statusColors = {
     active: '#3CB371',
@@ -65,6 +69,7 @@ const styles = StyleSheet.create({
     unreadCount: { color: 'white', fontSize: 12, fontWeight: 'bold' },
     adminBadge: { position: 'absolute', bottom: -2, left: -2, width: 22, height: 22, borderRadius: 11, justifyContent: 'center', alignItems: 'center', borderWidth: 2, backgroundColor: '#111827' },
     adminBadgeText: { color: 'white', fontSize: 9, fontWeight: 'bold' },
+    bannedOverlay: { position: 'absolute', right: -4, bottom: -4, width: 18, height: 18, borderRadius: 9, justifyContent: 'center', alignItems: 'center', backgroundColor: 'transparent' },
     statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
     statusText: { fontSize: 11, fontWeight: 'bold', color: 'white' },
     emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 150 },
@@ -145,8 +150,13 @@ const ChatListItem = React.memo(({ item, themeColors, filter, selectionMode, onS
             
             <Animated.View style={[styles.slidingContainer, animatedContentStyle]}>
                 <View style={styles.avatarContainer}>
-                    <View style={[styles.avatar, { backgroundColor: themeColors.input }]}>
+                    <View style={[styles.avatar, { backgroundColor: themeColors.input }]}> 
                         <Ionicons name="person-circle-outline" size={32} color={themeColors.textMuted} />
+                        {item.userIsBanned && (
+                            <View style={[styles.bannedOverlay, { backgroundColor: themeColors.background, borderColor: themeColors.background }]} pointerEvents="none">
+                                <Ionicons name="lock-closed" size={14} color={themeColors.danger} />
+                            </View>
+                        )}
                     </View>
                     {isUnread && !selectionMode && (
                         <View style={[styles.unreadBadge, { backgroundColor: themeColors.tint, borderColor: themeColors.background }]}>
@@ -184,6 +194,85 @@ const ActiveChatsScreen = () => {
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedChats, setSelectedChats] = useState<string[]>([]);
     const [modalConfig, setModalConfig] = useState<{ title: string; message: string; confirmText: string; onConfirm: () => void; cancelText?: string; variant?: 'destructive' | 'secondary'; } | null>(null);
+    // Prevent other modals from appearing immediately after this one closes (fixes the brief flash/blue-dot on web)
+    const modalLockRef = useRef(false);
+    const modalTimerRef = useRef<number | null>(null);
+
+    const closeModal = () => {
+        if (Platform.OS === 'web' && typeof document !== 'undefined') {
+            try {
+                const doBlur = () => {
+                    try { (document.activeElement as any)?.blur?.(); } catch (e) { /* ignore */ }
+                    try {
+                        const body = document.body as HTMLElement | null;
+                        if (body) {
+                            const prevTab = body.getAttribute('tabindex');
+                            body.setAttribute('tabindex', '-1');
+                            try { body.focus(); } catch (e) { /* ignore */ }
+                            if (prevTab === null) body.removeAttribute('tabindex');
+                            else body.setAttribute('tabindex', prevTab);
+                        }
+                    } catch (e) { /* ignore */ }
+                };
+                doBlur();
+                setTimeout(doBlur, 10);
+                setTimeout(doBlur, 140);
+                setTimeout(doBlur, 300);
+            } catch (e) { /* ignore */ }
+        }
+
+        // clear any pending modal shows
+        if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+
+        setModalConfig(null);
+        modalLockRef.current = true;
+        try { if (typeof window !== 'undefined') { (window as any).__modalIsClosing = true; (window as any).__modalSuppressedUntil = Date.now() + 720; } } catch(e) {}
+        setTimeout(() => { try { if (typeof window !== 'undefined') (window as any).__modalIsClosing = false; } catch(e) {} modalLockRef.current = false; }, 660);
+    };
+
+    const showModal = (config: { title: string; message: string; confirmText?: string; onConfirm?: () => void; cancelText?: string; variant?: 'destructive' | 'secondary' }) => {
+        try {
+            if (typeof window !== 'undefined' && (window as any).__modalIsClosing) {
+                const until = (window as any).__modalSuppressedUntil || 0;
+                const now = Date.now();
+                const delay = Math.max(until - now + 60, 420);
+                if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+                modalTimerRef.current = window.setTimeout(() => {
+                    if (modalLockRef.current) {
+                        modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                    } else {
+                        setModalConfig(config as any);
+                        modalTimerRef.current = null;
+                    }
+                }, delay);
+                return;
+            }
+            if (typeof window !== 'undefined') {
+                const until = (window as any).__modalSuppressedUntil || 0;
+                const now = Date.now();
+                if (now < until) {
+                    const delay = until - now + 40;
+                    if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+                    modalTimerRef.current = window.setTimeout(() => {
+                        if (modalLockRef.current) {
+                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                        } else {
+                            setModalConfig(config as any);
+                            modalTimerRef.current = null;
+                        }
+                    }, delay);
+                    return;
+                }
+            }
+        } catch(e) {}
+
+        if (modalLockRef.current) {
+            if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+        } else {
+            setModalConfig(config as any);
+        }
+    };  
 
     useEffect(() => { navigation.setOptions({ headerShown: false }); }, [navigation]);
 
@@ -206,10 +295,10 @@ const ActiveChatsScreen = () => {
         });
     }, []);
 
-    const handleDeleteSelected = () => {
+    const handleDeleteSelected = async () => {
         const performDelete = async () => {
             const chatsToDelete = [...selectedChats];
-            setModalConfig(null);
+            closeModal();
             exitSelectionMode();
             
             setChats((prevChats: Chat[]) => prevChats.filter((chat: Chat) => !chatsToDelete.includes(chat.id)));
@@ -224,16 +313,11 @@ const ActiveChatsScreen = () => {
                 await batch.commit();
             } catch (error) {
                 console.error("Błąd podczas usuwania czatów:", error);
-                 setModalConfig({
-                    title: 'Błąd',
-                    message: 'Nie udało się usunąć czatów. Odśwież listę, aby zobaczyć aktualny stan.',
-                    confirmText: 'OK',
-                    onConfirm: () => setModalConfig(null)
-                });
+                showMessage({ message: 'Błąd', description: 'Nie udało się usunąć czatów. Odśwież listę, aby zobaczyć aktualny stan.', type: 'danger', position: 'bottom', floating: true, backgroundColor: themeColors.danger, color: '#fff', style: { borderRadius: 8, marginHorizontal: 12, paddingVertical: 8 } });
             }
         };
         
-        setModalConfig({
+        showModal({
             title: selectedChats.length > 1 ? `Usuń czaty (${selectedChats.length})` : 'Usuń czat',
             message: 'Czy na pewno chcesz trwale usunąć zaznaczone czaty i wszystkie ich wiadomości? Tej operacji nie można cofnąć.',
             confirmText: 'Usuń',
@@ -255,6 +339,27 @@ const ActiveChatsScreen = () => {
 
     const filters: { key: FilterType, title: string }[] = [{ key: 'all', title: 'Wszystkie' }, { key: 'active', title: 'Aktywne' }, { key: 'waiting', title: 'Oczekujące' }, { key: 'closed', title: 'Zamknięte' }];
 
+    // Filter animation state & prefs
+    const filterIndex = useMemo(() => filters.findIndex(f => f.key === filter), [filter]);
+    const prevFilterIndexRef = useRef<number>(filterIndex);
+    const [animationsEnabledLocal, setAnimationsEnabledLocal] = useState(true);
+    const [reduceMotionLocal, setReduceMotionLocal] = useState(false);
+
+    useEffect(() => {
+        let mounted = true;
+        getAnimationsEnabled().then(v => { if (mounted) setAnimationsEnabledLocal(v); }).catch(() => {});
+        const onChange = (v: boolean) => { if (mounted) setAnimationsEnabledLocal(v); };
+        addAnimationListener(onChange);
+        AccessibilityInfo.isReduceMotionEnabled().then(v => { if (mounted) setReduceMotionLocal(v); }).catch(() => {});
+        const reduceListener: any = (v: boolean) => { if (mounted) setReduceMotionLocal(v); };
+        try {
+            const maybe = (AccessibilityInfo as any).addEventListener?.('reduceMotionChanged', reduceListener);
+            return () => { mounted = false; try { maybe?.remove?.(); } catch (e) {} removeAnimationListener(onChange); };
+        } catch (e) { return () => { mounted = false; removeAnimationListener(onChange); }; }
+    }, []);
+
+    useEffect(() => { prevFilterIndexRef.current = filterIndex; }, [filterIndex]);
+
     const headerOpacityAnim = useSharedValue(selectionMode ? 1 : 0);
     useEffect(() => {
         headerOpacityAnim.value = withTiming(selectionMode ? 1 : 0, { duration: 250, easing: Easing.inOut(Easing.ease) });
@@ -263,7 +368,23 @@ const ActiveChatsScreen = () => {
     const selectionHeaderStyle = useAnimatedStyle(() => ({ opacity: headerOpacityAnim.value }));
 
     return (
-        <View style={{ flex: 1, backgroundColor: themeColors.background }}>
+        <TabTransition tabIndex={0} style={{ flex: 1, backgroundColor: themeColors.background }}>
+            <ConfirmationModal
+                visible={!!modalConfig}
+                onClose={closeModal}
+                title={modalConfig?.title || ''}
+                message={modalConfig?.message || ''}
+                confirmText={modalConfig?.confirmText || ''}
+                cancelText={modalConfig?.cancelText}
+                variant={modalConfig?.variant}
+                onConfirm={() => {
+                    const onConfirmAction = modalConfig?.onConfirm;
+                    closeModal();
+                    if (onConfirmAction) {
+                        setTimeout(() => { try { onConfirmAction(); } catch (e) { console.error(e); } }, 320);
+                    }
+                }}
+            />
             <View style={styles.headerArea}>
                  <Animated.View style={[styles.headerWrapper, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
                     <View style={[styles.headerContainer, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
@@ -290,36 +411,58 @@ const ActiveChatsScreen = () => {
                  </View>
             )}
 
-            {loading && allChats.length === 0 ? (
-                <ActivityIndicator style={{ flex: 1, justifyContent: 'center' }} />
-            ) : (
-                <FlatList<Chat>
-                    data={filteredChats}
-                    keyExtractor={(item) => item.id}
-                    renderItem={({ item }) => {
-                        const admin = item.assignedAdminId ? admins[item.assignedAdminId] : undefined;
-                        
-                        return (
-                            <ChatListItem 
-                                item={item} 
-                                themeColors={themeColors} 
-                                filter={filter} 
-                                selectionMode={selectionMode} 
-                                isSelected={selectedChats.includes(item.id)} 
-                                onSelect={handleSelect} 
-                                onDeselect={handleDeselect} 
-                                assignedAdmin={admin}
-                            />
-                        );
-                    }}
-                    ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
-                    style={{ backgroundColor: themeColors.background }}
-                    contentContainerStyle={{ paddingTop: selectionMode ? 10 : 0 }}
-                    extraData={{ selectionMode, selectedChats, admins }}
-                />
-            )}
-            {modalConfig && <ConfirmationModal visible={true} onClose={() => setModalConfig(null)} {...modalConfig} />}
-        </View>
+            {
+                // animate filter content like a single sheet — direction based on filter index diff
+                (() => {
+                    const shouldAnimate = animationsEnabledLocal && !reduceMotionLocal;
+                    const enterDuration = shouldAnimate ? 50 : 0;
+                    const exitDuration = shouldAnimate ? 40 : 0;
+                    let enterAnim: any = FadeIn.duration(enterDuration);
+                    let exitAnim: any = FadeOut.duration(exitDuration);
+                    if (filterIndex > prevFilterIndexRef.current) {
+                        enterAnim = SlideInRight.duration(enterDuration);
+                        exitAnim = SlideOutLeft.duration(exitDuration);
+                    } else if (filterIndex < prevFilterIndexRef.current) {
+                        enterAnim = SlideInLeft.duration(enterDuration);
+                        exitAnim = SlideOutRight.duration(exitDuration);
+                    }
+
+                    return (
+                        <Animated.View key={`filter-${filter}`} entering={enterAnim} exiting={exitAnim} layout={Layout.duration(enterDuration)} style={{ flex: 1 }}>
+                            {loading && allChats.length === 0 ? (
+                                <ActivityIndicator style={{ flex: 1, justifyContent: 'center' }} />
+                            ) : (
+                                <FlatList<Chat>
+                                    data={filteredChats}
+                                    keyExtractor={(item) => item.id}
+                                    renderItem={({ item }) => {
+                                        const admin = item.assignedAdminId ? admins[item.assignedAdminId] : undefined;
+
+                                        return (
+                                            <ChatListItem 
+                                                item={item} 
+                                                themeColors={themeColors} 
+                                                filter={filter} 
+                                                selectionMode={selectionMode} 
+                                                isSelected={selectedChats.includes(item.id)} 
+                                                onSelect={handleSelect} 
+                                                onDeselect={handleDeselect} 
+                                                assignedAdmin={admin}
+                                            />
+                                        );
+                                    }}
+                                    ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
+                                    style={{ backgroundColor: themeColors.background }}
+                                    contentContainerStyle={{ paddingTop: selectionMode ? 10 : 0 }}
+                                    extraData={{ selectionMode, selectedChats, admins }}
+                                />
+                            )}
+                        </Animated.View>
+                    );
+                })()
+            }
+
+        </TabTransition>
     );
 };
 

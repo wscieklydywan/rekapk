@@ -1,13 +1,13 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, FlatList, StyleSheet, ActivityIndicator, useColorScheme, InteractionManager } from 'react-native';
-import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
-import { doc, getDoc, collection, query, getDocs, writeBatch, deleteDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
 import { Colors } from '@/constants/theme';
+import { db } from '@/lib/firebase';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { collection, deleteDoc, doc, getDoc, getDocs, query, writeBatch } from 'firebase/firestore';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, InteractionManager, Platform, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { TouchableOpacity } from 'react-native-gesture-handler';
-import { ConfirmationModal } from '@/components/ConfirmationModal';
+
 
 // --- TYPY --- 
 interface AiMessage {
@@ -75,6 +75,68 @@ const AiConversationDetailScreen = () => {
     const [messages, setMessages] = useState<AiMessage[]>([]);
     const [loading, setLoading] = useState(true);
     const [modalConfig, setModalConfig] = useState<any>(null);
+    const modalLockRef = useRef(false);
+    const modalTimerRef = useRef<number | null>(null);
+    const closeModal = () => {
+        if (Platform.OS === 'web' && typeof document !== 'undefined') {
+            try {
+                const doBlur = () => {
+                    try { (document.activeElement as any)?.blur?.(); } catch (e) { /* ignore */ }
+                    try {
+                        const body = document.body as HTMLElement | null;
+                        if (body) {
+                            const prevTab = body.getAttribute('tabindex');
+                            body.setAttribute('tabindex', '-1');
+                            try { body.focus(); } catch (e) { /* ignore */ }
+                            if (prevTab === null) body.removeAttribute('tabindex');
+                            else body.setAttribute('tabindex', prevTab);
+                        }
+                    } catch (e) { /* ignore */ }
+                };
+                doBlur();
+                setTimeout(doBlur, 10);
+                setTimeout(doBlur, 140);
+                setTimeout(doBlur, 300);
+            } catch (e) { /* ignore */ }
+        }
+
+        // clear pending modal timers
+        if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+
+        setModalConfig(null);
+        modalLockRef.current = true;
+        try { if (typeof window !== 'undefined') (window as any).__modalSuppressedUntil = Date.now() + 520; } catch(e) {}
+        setTimeout(() => { modalLockRef.current = false; }, 420);
+    };
+
+    const showModal = (config: { title: string; message?: string; confirmText?: string; onConfirm?: () => void; cancelText?: string; variant?: 'destructive' | 'secondary' }) => {
+        try {
+            if (typeof window !== 'undefined') {
+                const until = (window as any).__modalSuppressedUntil || 0;
+                const now = Date.now();
+                if (now < until) {
+                    const delay = until - now + 40;
+                    if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+                    modalTimerRef.current = window.setTimeout(() => {
+                        if (modalLockRef.current) {
+                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                        } else {
+                            setModalConfig(config as any);
+                            modalTimerRef.current = null;
+                        }
+                    }, delay);
+                    return;
+                }
+            }
+        } catch(e) {}
+
+        if (modalLockRef.current) {
+            if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+        } else {
+            setModalConfig(config as any);
+        }
+    }; 
 
     useEffect(() => {
         navigation.setOptions({ headerShown: false });
@@ -119,12 +181,10 @@ const AiConversationDetailScreen = () => {
         return () => task.cancel();
     }, [id]);
 
-    const handleDelete = () => {
+    const handleDelete = async () => {
         const performDelete = async () => {
             if (!id) return;
-            setModalConfig(null);
-            if (router.canGoBack()) router.back();
-
+            closeModal();
             try {
                 const messagesRef = collection(db, 'ai_conversations', id, 'messages');
                 const messagesSnapshot = await getDocs(messagesRef);
@@ -138,11 +198,11 @@ const AiConversationDetailScreen = () => {
             }
         };
 
-        setModalConfig({
+        showModal({
             title: 'Usuń rozmowę',
             message: 'Czy na pewno chcesz trwale usunąć tę rozmowę i wszystkie jej wiadomości? Tej operacji nie można cofnąć.',
             confirmText: 'Usuń',
-            cancelText: 'Anuluj', 
+            cancelText: 'Anuluj',
             onConfirm: performDelete,
             variant: 'destructive'
         });
@@ -183,7 +243,7 @@ const AiConversationDetailScreen = () => {
                     ListEmptyComponent={<SystemMessage content="Brak wiadomości w tej rozmowie." themeColors={themeColors} />} 
                 />
             )}
-            {modalConfig && <ConfirmationModal visible={true} onClose={() => setModalConfig(null)} {...modalConfig} />} 
+
         </View>
     );
 };

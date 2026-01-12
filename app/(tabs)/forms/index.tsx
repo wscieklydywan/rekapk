@@ -1,15 +1,18 @@
 
-import React, { useMemo, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, useColorScheme, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { useRouter, useNavigation } from 'expo-router';
-import { Colors } from '@/constants/theme';
 import { useFormContext } from '@/app/contexts/FormProvider';
+import { ConfirmationModal } from '@/components/ConfirmationModal';
+import TabTransition from '@/components/TabTransition';
+import { Colors } from '@/constants/theme';
 import { ContactForm } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { FadeIn, FadeOut, useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
-import { ConfirmationModal } from '@/components/ConfirmationModal';
-import { writeBatch, doc, collection, getDocs } from 'firebase/firestore';
+import { useNavigation, useRouter } from 'expo-router';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Platform, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { showMessage } from 'react-native-flash-message';
+import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+
 import { db } from '@/lib/firebase';
+import { collection, doc, getDocs, writeBatch } from 'firebase/firestore';
 
 const categoryTranslations: { [key: string]: string } = {
     'websites': 'Strony Internetowe',
@@ -115,6 +118,83 @@ const FormsListScreen = () => {
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedItems, setSelectedItems] = useState<string[]>([]);
     const [modalConfig, setModalConfig] = useState<any>(null);
+    const modalLockRef = useRef(false);
+    const modalTimerRef = useRef<number | null>(null);
+    const closeModal = () => {
+        if (Platform.OS === 'web' && typeof document !== 'undefined') {
+            try {
+                const doBlur = () => {
+                    try { (document.activeElement as any)?.blur?.(); } catch (e) { /* ignore */ }
+                    try {
+                        const body = document.body as HTMLElement | null;
+                        if (body) {
+                            const prevTab = body.getAttribute('tabindex');
+                            body.setAttribute('tabindex', '-1');
+                            try { body.focus(); } catch (e) { /* ignore */ }
+                            if (prevTab === null) body.removeAttribute('tabindex');
+                            else body.setAttribute('tabindex', prevTab);
+                        }
+                    } catch (e) { /* ignore */ }
+                };
+                doBlur();
+                setTimeout(doBlur, 10);
+                setTimeout(doBlur, 140);
+                setTimeout(doBlur, 300);
+            } catch (e) { /* ignore */ }
+        }
+
+        // clear any scheduled modal shows
+        if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+
+        setModalConfig(null);
+        modalLockRef.current = true;
+        try { if (typeof window !== 'undefined') { (window as any).__modalIsClosing = true; (window as any).__modalSuppressedUntil = Date.now() + 720; } } catch(e) {}
+        setTimeout(() => { try { if (typeof window !== 'undefined') (window as any).__modalIsClosing = false; } catch(e) {} modalLockRef.current = false; }, 660);
+    };
+
+    const showModal = (config: { title: string; message?: string; confirmText?: string; onConfirm?: () => void; cancelText?: string; variant?: 'destructive' | 'secondary' }) => {
+        try {
+            if (typeof window !== 'undefined' && (window as any).__modalIsClosing) {
+                const until = (window as any).__modalSuppressedUntil || 0;
+                const now = Date.now();
+                const delay = Math.max(until - now + 60, 420);
+                if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+                modalTimerRef.current = window.setTimeout(() => {
+                    if (modalLockRef.current) {
+                        modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                    } else {
+                        setModalConfig(config as any);
+                        modalTimerRef.current = null;
+                    }
+                }, delay);
+                return;
+            }
+            if (typeof window !== 'undefined') {
+                const until = (window as any).__modalSuppressedUntil || 0;
+                const now = Date.now();
+                if (now < until) {
+                    const delay = until - now + 40;
+                    if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+                    modalTimerRef.current = window.setTimeout(() => {
+                        if (modalLockRef.current) {
+                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                        } else {
+                            setModalConfig(config as any);
+                            modalTimerRef.current = null;
+                        }
+                    }, delay);
+                    return;
+                }
+            }
+        } catch(e) {}
+
+        if (modalLockRef.current) {
+            if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+        } else {
+            setModalConfig(config as any);
+        }
+    }; 
 
     useEffect(() => { navigation.setOptions({ headerShown: false }); }, [navigation]);
 
@@ -143,10 +223,10 @@ const FormsListScreen = () => {
         });
     };
 
-    const handleDeleteSelected = () => {
+    const handleDeleteSelected = async () => {
         const performDelete = async () => {
             const itemsToDelete = [...selectedItems];
-            setModalConfig(null);
+            closeModal();
             exitSelectionMode();
             
             setForms(prevForms => prevForms.filter(form => !itemsToDelete.includes(form.id)));
@@ -164,16 +244,11 @@ const FormsListScreen = () => {
                 await batch.commit();
             } catch (error) {
                 console.error("Błąd podczas usuwania formularzy i ich wiadomości:", error);
-                setModalConfig({
-                    title: 'Błąd',
-                    message: 'Nie udało się usunąć formularzy. Odśwież listę, aby zobaczyć aktualny stan.',
-                    confirmText: 'OK',
-                    onConfirm: () => setModalConfig(null)
-                });
+                showMessage({ message: 'Błąd', description: 'Nie udało się usunąć formularzy. Odśwież listę, aby zobaczyć aktualny stan.', type: 'danger', position: 'bottom', floating: true, backgroundColor: themeColors.danger, color: '#fff', style: { borderRadius: 8, marginHorizontal: 12, paddingVertical: 8 } });
             }
         };
         
-        setModalConfig({
+        showModal({
             title: selectedItems.length > 1 ? `Usuń formularze (${selectedItems.length})` : 'Usuń formularz',
             message: 'Czy na pewno chcesz trwale usunąć zaznaczone formularze i wszystkie ich wiadomości? Tej operacji nie można cofnąć.',
             confirmText: 'Usuń',
@@ -189,7 +264,23 @@ const FormsListScreen = () => {
     const selectionHeaderStyle = useAnimatedStyle(() => ({ opacity: headerOpacityAnim.value }));
 
     return (
-        <View style={{ flex: 1, backgroundColor: themeColors.background }}>
+        <TabTransition tabIndex={1} style={{ flex: 1, backgroundColor: themeColors.background }}>
+            <ConfirmationModal
+                visible={!!modalConfig}
+                onClose={closeModal}
+                title={modalConfig?.title || ''}
+                message={modalConfig?.message || ''}
+                confirmText={modalConfig?.confirmText || ''}
+                cancelText={modalConfig?.cancelText}
+                variant={modalConfig?.variant}
+                onConfirm={() => {
+                    const onConfirmAction = modalConfig?.onConfirm;
+                    closeModal();
+                    if (onConfirmAction) {
+                        setTimeout(() => { try { onConfirmAction(); } catch (e) { console.error(e); } }, 320);
+                    }
+                }}
+            />
             <View style={styles.headerArea}>
                 <Animated.View style={[styles.headerWrapper, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
                     <View style={[styles.mainHeader, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
@@ -233,8 +324,8 @@ const FormsListScreen = () => {
                     extraData={{ selectionMode, selectedItems }}
                 />
             }
-             {modalConfig && <ConfirmationModal visible={true} onClose={() => setModalConfig(null)} {...modalConfig} />} 
-        </View>
+
+        </TabTransition>
     );
 };
 

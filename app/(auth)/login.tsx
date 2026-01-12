@@ -1,19 +1,19 @@
 
-import { useState } from 'react';
-import { View, Text, TextInput, StyleSheet, ActivityIndicator, TouchableOpacity, useColorScheme, KeyboardAvoidingView, Platform } from 'react-native';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/theme';
-import { ConfirmationModal } from '@/components/ConfirmationModal';
+import { auth } from '@/lib/firebase';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { useState } from 'react';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { showMessage } from 'react-native-flash-message';
 
 const LoginScreen = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
-  const [modalConfig, setModalConfig] = useState<{ title: string; message: string; confirmText: string; onConfirm: () => void; } | null>(null);
+
   const router = useRouter();
   const colorScheme = useColorScheme();
   const themeColors = Colors[colorScheme ?? 'light'];
@@ -22,12 +22,7 @@ const LoginScreen = () => {
     if (loading) return; // Zabezpieczenie przed wielokrotnym kliknięciem
 
     if (!email || !password) {
-        setModalConfig({
-            title: 'Błąd',
-            message: 'Proszę wypełnić oba pola.',
-            confirmText: 'OK',
-            onConfirm: () => setModalConfig(null)
-        });
+        showMessage({ message: 'Błąd', description: 'Proszę wypełnić oba pola.', type: 'danger', position: 'bottom', floating: true, backgroundColor: themeColors.danger, color: '#fff', style: { borderRadius: 8, marginHorizontal: 12, paddingVertical: 8 } });
       return;
     }
 
@@ -40,12 +35,7 @@ const LoginScreen = () => {
       if (error.code === 'auth/invalid-email') {
         errorMessage = 'Proszę podać poprawny adres e-mail.';
       }
-      setModalConfig({
-        title: 'Logowanie nieudane',
-        message: errorMessage,
-        confirmText: 'OK',
-        onConfirm: () => setModalConfig(null)
-      });
+      showMessage({ message: 'Logowanie nieudane', description: errorMessage, type: 'danger', position: 'bottom', floating: true, backgroundColor: themeColors.danger, color: '#fff', style: { borderRadius: 8, marginHorizontal: 12, paddingVertical: 8 } });
     } finally {
       setLoading(false);
     }
@@ -56,13 +46,7 @@ const LoginScreen = () => {
         behavior={Platform.OS === "ios" ? "padding" : "height"} 
         style={[styles.container, { backgroundColor: themeColors.background }]} >
 
-        {modalConfig && (
-            <ConfirmationModal 
-                visible={true}
-                onClose={() => setModalConfig(null)}
-                {...modalConfig}                
-            />
-        )}
+
         
       <Text style={[styles.title, { color: themeColors.text }]}>Logowanie</Text>
       
@@ -71,6 +55,7 @@ const LoginScreen = () => {
         <View style={[styles.inputWrapper, { backgroundColor: themeColors.input }]}>
             <Ionicons name="mail-outline" size={20} color={themeColors.icon} style={styles.icon} />
             <TextInput
+                nativeID="login-email"
                 style={[styles.input, { color: themeColors.text }]}
                 placeholder="Wpisz swój e-mail"
                 placeholderTextColor={themeColors.textMuted}
@@ -78,6 +63,7 @@ const LoginScreen = () => {
                 onChangeText={setEmail}
                 keyboardType="email-address"
                 autoCapitalize="none"
+                autoComplete="email"
             />
         </View>
       </View>
@@ -87,12 +73,15 @@ const LoginScreen = () => {
         <View style={[styles.inputWrapper, { backgroundColor: themeColors.input }]}>
             <Ionicons name="lock-closed-outline" size={20} color={themeColors.icon} style={styles.icon} />
             <TextInput
+                nativeID="login-password"
                 style={[styles.input, { color: themeColors.text }]}
                 placeholder="Wpisz swoje hasło"
                 placeholderTextColor={themeColors.textMuted}
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry={!isPasswordVisible}
+                autoComplete="password"
+                textContentType="password"
             />
             <TouchableOpacity onPress={() => setIsPasswordVisible(!isPasswordVisible)} style={styles.eyeIcon}>
                  <Ionicons name={isPasswordVisible ? 'eye-off-outline' : 'eye-outline'} size={22} color={themeColors.icon} />

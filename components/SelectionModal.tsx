@@ -1,7 +1,8 @@
-import React from 'react';
-import { Modal, View, Text, StyleSheet, TouchableOpacity, useColorScheme, SafeAreaView } from 'react-native';
+import AnimatedModal from '@/components/AnimatedModal';
 import { Colors } from '@/constants/theme';
 import { Ionicons } from '@expo/vector-icons';
+import React from 'react';
+import { StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 
 type Option = {
   label: string;
@@ -22,40 +23,31 @@ export const SelectionModal: React.FC<SelectionModalProps> = ({ visible, onClose
   const themeColors = Colors[theme];
 
   return (
-    <Modal
-      animationType="slide"
-      transparent={true}
-      visible={visible}
-      onRequestClose={onClose}
-    >
-      <View style={[styles.centeredView]}>
-        <View style={[styles.modalView, { backgroundColor: themeColors.card }]}>
-          <Text style={[styles.modalTitle, { color: themeColors.text }]}>{title}</Text>
+    <AnimatedModal visible={visible} onClose={onClose} position="bottom" contentStyle={[styles.modalView, { backgroundColor: themeColors.card }]}>
+        <Text style={[styles.modalTitle, { color: themeColors.text }]}>{title}</Text>
 
-          <View style={styles.optionsContainer}>
-            {options.map((option) => (
-              <TouchableOpacity
-                key={option.value}
-                style={styles.optionButton}
-                onPress={() => onSelect(option.value)}
-              >
-                <Text style={[styles.optionText, { color: themeColors.text }]}>{option.label}</Text>
-                {currentValue === option.value && (
-                  <Ionicons name="checkmark-circle" size={24} color={themeColors.tint} />
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <TouchableOpacity
-            style={[styles.closeButton, { backgroundColor: themeColors.background }]}
-            onPress={onClose}
-          >
-            <Text style={[styles.closeButtonText, { color: themeColors.text }]}>Anuluj</Text>
-          </TouchableOpacity>
+        <View style={styles.optionsContainer}>
+          {options.map((option) => (
+            <TouchableOpacity
+              key={option.value}
+              style={styles.optionButton}
+              onPress={() => onSelect(option.value)}
+            >
+              <Text style={[styles.optionText, { color: themeColors.text }]}>{option.label}</Text>
+              {currentValue === option.value && (
+                <Ionicons name="checkmark-circle" size={24} color={themeColors.tint} />
+              )}
+            </TouchableOpacity>
+          ))}
         </View>
-      </View>
-    </Modal>
+
+        <TouchableOpacity
+          style={[styles.closeButton, { backgroundColor: themeColors.background }]}
+          onPress={onClose}
+        >
+          <Text style={[styles.closeButtonText, { color: themeColors.text }]}>Anuluj</Text>
+        </TouchableOpacity>
+    </AnimatedModal>
   );
 };
 

@@ -1,8 +1,7 @@
-
-import React, { useEffect } from 'react';
-import { Modal, View, Text, TouchableOpacity, StyleSheet, useColorScheme, Pressable, Platform } from 'react-native';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
 import { Colors } from '@/constants/theme';
+import React, { useEffect, useState } from 'react';
+import { Modal, Platform, Pressable, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 interface ConfirmationModalProps {
     visible: boolean;
@@ -30,16 +29,41 @@ export const ConfirmationModal = ({
 
     const scale = useSharedValue(0.95);
     const opacity = useSharedValue(0);
+    const backdropOpacity = useSharedValue(0);
+
+    const [mounted, setMounted] = useState(visible);
 
     useEffect(() => {
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+
         if (visible) {
+            setMounted(true);
+            // animate in
             scale.value = withTiming(1, { duration: 200, easing: Easing.out(Easing.exp) });
             opacity.value = withTiming(1, { duration: 150 });
+            backdropOpacity.value = withTiming(1, { duration: 150 });
         } else {
-            scale.value = withTiming(0.95, { duration: 150 });
-            opacity.value = withTiming(0, { duration: 100 });
+            if (Platform.OS === 'web') {
+                // On web, skip exit animation to avoid intermittent flash caused by timers/focus changes
+                scale.value = 0.95;
+                opacity.value = 0;
+                backdropOpacity.value = 0;
+                // unmount immediately
+                setMounted(false);
+            } else {
+                // animate out (native)
+                scale.value = withTiming(0.95, { duration: 200 });
+                opacity.value = withTiming(0, { duration: 160 });
+                backdropOpacity.value = withTiming(0, { duration: 180 });
+                // wait for animation to finish before unmounting
+                timeout = setTimeout(() => setMounted(false), 320);
+            }
         }
-    }, [visible, scale, opacity]);
+
+        return () => {
+            if (timeout) clearTimeout(timeout);
+        };
+    }, [visible, scale, opacity, backdropOpacity]);
 
     const animatedStyle = useAnimatedStyle(() => {
         return {
@@ -48,6 +72,8 @@ export const ConfirmationModal = ({
         };
     });
 
+    const backdropAnim = useAnimatedStyle(() => ({ opacity: backdropOpacity.value }));
+
     let confirmButtonBgColor = themeColors.tint;
     if (variant === 'destructive') {
         confirmButtonBgColor = themeColors.danger;
@@ -55,14 +81,17 @@ export const ConfirmationModal = ({
         confirmButtonBgColor = themeColors.secondary;
     }
 
+    if (!mounted) return null;
+
     return (
         <Modal
             animationType="none"
             transparent={true}
-            visible={visible}
+            visible={mounted}
             onRequestClose={onClose}
         >
             <Pressable style={styles.background} onPress={onClose}>
+                <Animated.View style={[styles.backdrop, backdropAnim, { backgroundColor: 'rgba(0,0,0,0.6)' }]} />
                 <Animated.View style={[styles.modalView, { backgroundColor: themeColors.modalBackground }, animatedStyle]}>
                     <Text style={[styles.modalTitle, { color: themeColors.text }]}>{title}</Text>
                     <Text style={[styles.modalMessage, { color: themeColors.textMuted }]}>{message}</Text>
@@ -94,8 +123,8 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: 'rgba(0,0,0,0.6)',
     },
+    backdrop: { ...StyleSheet.absoluteFillObject },
     modalView: {
         margin: 20,
         borderRadius: 20,

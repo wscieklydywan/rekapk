@@ -9,12 +9,21 @@ service cloud.firestore {
       // Only consultants can write to chats
       allow write: if request.auth.uid != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'consultant';
 
+      // Helper to check whether a user is currently banned
+      function isUserBanned(uid) {
+        let u = get(/databases/$(database)/documents/users/$(uid));
+        return u.exists && u.data.isBanned == true && ( !(u.data.bannedUntil) || request.time < u.data.bannedUntil );
+      }
+
       // Rules for messages within a chat
       match /messages/{messageId} {
         allow read: if request.auth.uid != null;
         
-        // Users can create messages if they are the sender, and consultants can also create messages
-        allow create: if request.auth.uid != null && (request.resource.data.userId == request.auth.uid || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'consultant');
+        // Users can create messages if they are the sender and not banned; consultants can always create messages
+        allow create: if request.auth.uid != null && (
+          (request.resource.data.userId == request.auth.uid && !isUserBanned(request.auth.uid))
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'consultant'
+        );
 
         // Only consultants can update or delete messages
         allow update, delete: if request.auth.uid != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'consultant';
@@ -42,7 +51,11 @@ service cloud.firestore {
 
     // Users collection to store user roles
     match /users/{userId} {
-      allow read, write: if request.auth.uid != null;
+      allow read: if request.auth.uid != null;
+      // Allow writes only by the user themself or by consultants (admins)
+      allow write: if request.auth.uid != null && (
+        request.auth.uid == userId || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'consultant'
+      );
     }
   }
 }

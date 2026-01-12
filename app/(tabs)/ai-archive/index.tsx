@@ -1,13 +1,15 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
-import { View, Text, FlatList, StyleSheet, ActivityIndicator, useColorScheme, TouchableOpacity } from 'react-native';
-import { useRouter, useNavigation } from 'expo-router';
-import { collection, onSnapshot, query, orderBy, writeBatch, doc, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
-import { Colors } from '@/constants/theme';
-import { Ionicons } from '@expo/vector-icons';
-import Animated, { FadeIn, FadeOut, useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
+import TabTransition from '@/components/TabTransition';
+import { Colors } from '@/constants/theme';
+import { db } from '@/lib/firebase';
+import { Ionicons } from '@expo/vector-icons';
+import { useNavigation, useRouter } from 'expo-router';
+import { collection, doc, getDocs, onSnapshot, orderBy, query, writeBatch } from 'firebase/firestore';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Platform, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+
 
 // Typy
 interface AiConversation {
@@ -43,14 +45,14 @@ const AiConversationListItem = ({ item, themeColors, selectionMode, isSelected, 
 
     const animatedContentStyle = useAnimatedStyle(() => {
         return {
-            marginLeft: withTiming(selectionMode ? 40 : 0, { duration: 250, easing: Easing.inOut(Easing.ease) }),
+            marginLeft: withTiming(selectionMode ? 40 : 0, { duration: 120, easing: Easing.inOut(Easing.ease) }),
         };
     });
 
     return (
         <TouchableOpacity onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomColor: themeColors.border }, isSelected && { backgroundColor: themeColors.selection }]}>
             {selectionMode && (
-                <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={styles.checkboxContainer}>
+                <Animated.View entering={FadeIn.duration(120)} exiting={FadeOut.duration(120)} style={styles.checkboxContainer}>
                     <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={isSelected ? themeColors.tint : themeColors.textMuted}/>
                 </Animated.View>
             )}
@@ -82,6 +84,83 @@ const AiArchiveScreen = () => {
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedItems, setSelectedItems] = useState<string[]>([]);
     const [modalConfig, setModalConfig] = useState<any>(null);
+    const modalLockRef = useRef(false);
+    const modalTimerRef = useRef<number | null>(null);
+    const closeModal = () => {
+        if (Platform.OS === 'web' && typeof document !== 'undefined') {
+            try {
+                const doBlur = () => {
+                    try { (document.activeElement as any)?.blur?.(); } catch (e) { /* ignore */ }
+                    try {
+                        const body = document.body as HTMLElement | null;
+                        if (body) {
+                            const prevTab = body.getAttribute('tabindex');
+                            body.setAttribute('tabindex', '-1');
+                            try { body.focus(); } catch (e) { /* ignore */ }
+                            if (prevTab === null) body.removeAttribute('tabindex');
+                            else body.setAttribute('tabindex', prevTab);
+                        }
+                    } catch (e) { /* ignore */ }
+                };
+                doBlur();
+                setTimeout(doBlur, 10);
+                setTimeout(doBlur, 140);
+                setTimeout(doBlur, 300);
+            } catch (e) { /* ignore */ }
+        }
+
+        // clear scheduled modal shows
+        if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+
+        setModalConfig(null);
+        modalLockRef.current = true;
+        try { if (typeof window !== 'undefined') { (window as any).__modalIsClosing = true; (window as any).__modalSuppressedUntil = Date.now() + 720; } } catch(e) {}
+        setTimeout(() => { try { if (typeof window !== 'undefined') (window as any).__modalIsClosing = false; } catch(e) {} modalLockRef.current = false; }, 660);
+    };
+
+    const showModal = (config: { title: string; message?: string; confirmText?: string; onConfirm?: () => void; cancelText?: string; variant?: 'destructive' | 'secondary' }) => {
+        try {
+            if (typeof window !== 'undefined' && (window as any).__modalIsClosing) {
+                const until = (window as any).__modalSuppressedUntil || 0;
+                const now = Date.now();
+                const delay = Math.max(until - now + 60, 420);
+                if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+                modalTimerRef.current = window.setTimeout(() => {
+                    if (modalLockRef.current) {
+                        modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                    } else {
+                        setModalConfig(config as any);
+                        modalTimerRef.current = null;
+                    }
+                }, delay);
+                return;
+            }
+            if (typeof window !== 'undefined') {
+                const until = (window as any).__modalSuppressedUntil || 0;
+                const now = Date.now();
+                if (now < until) {
+                    const delay = until - now + 40;
+                    if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+                    modalTimerRef.current = window.setTimeout(() => {
+                        if (modalLockRef.current) {
+                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                        } else {
+                            setModalConfig(config as any);
+                            modalTimerRef.current = null;
+                        }
+                    }, delay);
+                    return;
+                }
+            }
+        } catch(e) {}
+
+        if (modalLockRef.current) {
+            if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
+            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+        } else {
+            setModalConfig(config as any);
+        }
+    }; 
 
     useEffect(() => { navigation.setOptions({ headerShown: false }); }, [navigation]);
 
@@ -111,10 +190,10 @@ const AiArchiveScreen = () => {
         });
     };
 
-    const handleDeleteSelected = () => {
+    const handleDeleteSelected = async () => {
         const performDelete = async () => {
             const itemsToDelete = [...selectedItems];
-            setModalConfig(null);
+            closeModal();
             exitSelectionMode();
             
             setAllConversations(prevConvs => prevConvs.filter(conv => !itemsToDelete.includes(conv.id)));
@@ -135,7 +214,7 @@ const AiArchiveScreen = () => {
             }
         };
         
-        setModalConfig({
+        showModal({
             title: selectedItems.length > 1 ? `Usuń rozmowy (${selectedItems.length})` : 'Usuń rozmowę',
             message: 'Czy na pewno chcesz trwale usunąć zaznaczone rozmowy i wszystkie ich wiadomości? Tej operacji nie można cofnąć.',
             confirmText: 'Usuń',
@@ -146,12 +225,28 @@ const AiArchiveScreen = () => {
     };
     
     const headerOpacityAnim = useSharedValue(selectionMode ? 1 : 0); // CORRECTED INITIALIZATION
-    useEffect(() => { headerOpacityAnim.value = withTiming(selectionMode ? 1 : 0, { duration: 250 }); }, [selectionMode]);
+    useEffect(() => { headerOpacityAnim.value = withTiming(selectionMode ? 1 : 0, { duration: 50 }); }, [selectionMode]);
     const defaultHeaderStyle = useAnimatedStyle(() => ({ opacity: 1 - headerOpacityAnim.value }));
     const selectionHeaderStyle = useAnimatedStyle(() => ({ opacity: headerOpacityAnim.value }));
 
     return (
-        <View style={{ flex: 1, backgroundColor: themeColors.background }}>
+        <TabTransition tabIndex={2} style={{ flex: 1, backgroundColor: themeColors.background }}>
+            <ConfirmationModal
+                visible={!!modalConfig}
+                onClose={closeModal}
+                title={modalConfig?.title || ''}
+                message={modalConfig?.message || ''}
+                confirmText={modalConfig?.confirmText || ''}
+                cancelText={modalConfig?.cancelText}
+                variant={modalConfig?.variant}
+                onConfirm={() => {
+                    const onConfirmAction = modalConfig?.onConfirm;
+                    closeModal();
+                    if (onConfirmAction) {
+                        setTimeout(() => { try { onConfirmAction(); } catch (e) { console.error(e); } }, 320);
+                    }
+                }}
+            />
             <View style={styles.headerArea}>
                  <Animated.View style={[styles.headerWrapper, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
                     <View style={[styles.mainHeader, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
@@ -181,8 +276,8 @@ const AiArchiveScreen = () => {
                     extraData={{selectionMode, selectedItems}}
                 />
             )}
-            {modalConfig && <ConfirmationModal visible={true} onClose={() => setModalConfig(null)} {...modalConfig} />} 
-        </View>
+
+        </TabTransition>
     );
 };
 

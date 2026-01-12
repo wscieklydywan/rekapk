@@ -29,6 +29,14 @@ export interface Chat {
     lastAdminPushAt?: Timestamp;
     assignedAdminId?: string | null;
     activeAdminId?: string | null;
+
+    // Denormalized user ban fields (for admin/client quick checks)
+    userUid?: string;
+    userIsBanned?: boolean;
+    bannedUntil?: Timestamp | null;
+    banReason?: string;
+    bannedBy?: string | null;
+    bannedAt?: Timestamp | null;
 }
 
 export interface Message {
@@ -36,9 +44,10 @@ export interface Message {
     text: string;
     sender: 'user' | 'admin' | 'system' | 'ai';
     createdAt: Timestamp;
+    clientId?: string;
     isAiContext?: boolean; // Added field
     isAiContextFooter?: boolean; // Added field
-}
+} 
 
 export interface AdminUser {
     uid: string;

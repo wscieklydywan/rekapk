@@ -38,6 +38,14 @@ export interface Chat {
   assignedAdminId: string | null;
   isBlocked?: boolean;
   lastPushAt?: Timestamp | null;
+
+  // Optional denormalized user ban fields (for quick client-side checks without extra reads)
+  userUid?: string;
+  userIsBanned?: boolean;
+  bannedUntil?: Timestamp | null;
+  banReason?: string;
+  bannedBy?: string;
+  bannedAt?: Timestamp | null;
 }
 
 export interface Message {
@@ -47,11 +55,15 @@ export interface Message {
   sender: 'user' | 'admin' | 'system' | 'ai';
   createdAt: Timestamp;
   adminId?: string;
+  clientId?: string;
   type?: 'text' | 'image' | 'file';
   isRead: boolean;
   metadata?: Record<string, any>;
   isFirstMessage?: boolean;
-}
+  // Local-only runtime flags (not necessarily persisted on server)
+  pending?: boolean;
+  failed?: boolean;
+} 
 
 export interface ContactForm {
   id: string;
@@ -65,6 +77,14 @@ export interface ContactForm {
   adminUnread: number;
   [key: string]: any; 
 }
+
+// Message stored on contact forms
+export interface FormMessage {
+  id: string;
+  text: string;
+  createdAt: Timestamp;
+  [key: string]: any;
+} 
 
 export interface AiConversation {
     id: string;

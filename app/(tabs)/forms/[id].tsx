@@ -1,13 +1,13 @@
 
-import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, useColorScheme, ActivityIndicator, ScrollView, TouchableOpacity, Linking, Platform, InteractionManager } from 'react-native';
-import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
-import { doc, onSnapshot, updateDoc, deleteDoc, collection, query, orderBy, getDocs, writeBatch } from 'firebase/firestore';
+import { Colors } from '@/constants/theme';
 import { db } from '@/lib/firebase';
 import { ContactForm, FormMessage } from '@/schemas';
-import { Colors } from '@/constants/theme';
 import { Ionicons } from '@expo/vector-icons';
-import { ConfirmationModal } from '@/components/ConfirmationModal';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, updateDoc, writeBatch } from 'firebase/firestore';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, InteractionManager, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+
 import { useFormContext } from '@/app/contexts/FormProvider';
 
 const AVATAR_COLORS = ['#c56b66', '#8c7aa8', '#5f9ac9', '#4caaa0', '#83a869', '#e59f49', '#7c635a', '#b0b86c', '#d15f8a', '#4baadd'];
@@ -42,7 +42,6 @@ const FormDetailScreen = () => {
     const [form, setForm] = useState<ContactForm | null>(null);
     const [messages, setMessages] = useState<FormMessage[]>([]);
     const [loading, setLoading] = useState(true);
-    const [modalVisible, setModalVisible] = useState(false);
     const [showBackButtonBadge, setShowBackButtonBadge] = useState(false);
     const isDeleting = useRef(false);
 
@@ -88,12 +87,14 @@ const FormDetailScreen = () => {
         return () => task.cancel();
     }, [formId, navigation]);
 
+    const [modalVisible, setModalVisible] = useState(false);
+
     const requestDelete = () => setModalVisible(true);
 
     const handleDelete = async () => {
         if (!formId) return;
         isDeleting.current = true;
-        setModalVisible(false);
+
 
         if (router.canGoBack()) {
             router.back();
@@ -162,14 +163,7 @@ const FormDetailScreen = () => {
                 </ScrollView>
             )}
 
-            <ConfirmationModal 
-                visible={modalVisible} 
-                onClose={() => setModalVisible(false)} 
-                title="Usuń formularz" 
-                message="Czy na pewno chcesz trwale usunąć ten formularz i wszystkie jego wiadomości? Tej operacji nie można cofnąć." 
-                confirmText="Usuń" 
-                onConfirm={handleDelete} 
-                variant="destructive" />
+
         </View>
     );
 };

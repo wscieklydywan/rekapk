@@ -1,19 +1,39 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, useColorScheme, TouchableOpacity, ScrollView, AppState, Platform, Modal, TextInput, KeyboardAvoidingView } from 'react-native';
+import AnimatedModal from '@/components/AnimatedModal';
+import { ConfirmationModal } from '@/components/ConfirmationModal';
+import { Colors } from '@/constants/theme';
+import { useAuth } from '@/hooks/useAuth';
+import { Ionicons } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
 import { getAuth, signOut } from 'firebase/auth';
 import { doc, getFirestore, onSnapshot, updateDoc } from 'firebase/firestore';
-import { useAuth } from '@/hooks/useAuth';
-import { Colors } from '@/constants/theme';
-import { Ionicons } from '@expo/vector-icons';
-import { ConfirmationModal } from '@/components/ConfirmationModal';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AppState, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
+
 import { SelectionModal } from '@/components/SelectionModal';
+import TabTransition from '@/components/TabTransition';
+import { getAnimationsEnabled, setAnimationsEnabled } from '@/components/animationPreference';
 import * as Notifications from 'expo-notifications';
 
 const APP_VERSION = "1.0.5";
 
-const SettingRow = ({ item, themeColors, isFirst, isLast }: { item: any, themeColors: any, isFirst: boolean, isLast: boolean }) => (
+type SettingItem = {
+  id: string;
+  label: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  value?: string;
+  onPress?: () => void | Promise<void>;
+  iconColor?: string;
+  textColor?: string;
+};
+
+type SettingsSection = {
+  title: string;
+  isDestructive?: boolean;
+  items: SettingItem[];
+};
+
+const SettingRow = ({ item, themeColors, isFirst, isLast }: { item: SettingItem, themeColors: any, isFirst: boolean, isLast: boolean }) => (
   <TouchableOpacity 
     style={[
       styles.settingRow, 
@@ -23,9 +43,9 @@ const SettingRow = ({ item, themeColors, isFirst, isLast }: { item: any, themeCo
     disabled={!item.onPress}
   >
     <Ionicons name={item.icon} size={22} color={item.iconColor || themeColors.textMuted} style={styles.settingIcon}/>
-    <Text style={[styles.settingLabel, { color: item.textColor || themeColors.text }]}>{item.label}</Text>
+    <Text style={[styles.settingLabel, { color: item.textColor || themeColors.text }]} numberOfLines={1} ellipsizeMode="tail">{item.label}</Text>
     <View style={styles.settingValueContainer}>
-      {item.value && <Text style={[styles.settingValue, { color: themeColors.textMuted }]}>{item.value}</Text>}
+      {item.value && <Text style={[styles.settingValue, { color: themeColors.textMuted }]} numberOfLines={1} ellipsizeMode="tail">{item.value}</Text>}
       {item.onPress && <Ionicons name="chevron-forward" size={20} color={themeColors.textMuted} />}
     </View>
   </TouchableOpacity>
@@ -38,13 +58,25 @@ const SettingsScreen = () => {
   const auth = getAuth();
   const db = getFirestore();
 
-  const [logoutModalVisible, setLogoutModalVisible] = useState(false);
+
   const [notificationStatus, setNotificationStatus] = useState<boolean | null>(null);
   const [notificationMode, setNotificationMode] = useState<'assigned' | 'all'>('assigned');
   const [displayName, setDisplayName] = useState(user?.displayName || '');
+  const [logoutModalVisible, setLogoutModalVisible] = useState(false);
   const [modeSelectionModalVisible, setModeSelectionModalVisible] = useState(false);
   const [isNameModalVisible, setNameModalVisible] = useState(false);
   const [tempDisplayName, setTempDisplayName] = useState(displayName);
+  const [animationsEnabled, setAnimationsEnabledState] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    getAnimationsEnabled().then(v => { if (mounted) setAnimationsEnabledState(v); }).catch(() => {});
+    return () => { mounted = false; };
+  }, []);
+
+  const toggleAnimations = async (v: boolean) => {
+    try { await setAnimationsEnabled(v); setAnimationsEnabledState(v); } catch (e) {}
+  };
 
   useEffect(() => {
     const checkPermissions = async () => {
@@ -91,15 +123,29 @@ const SettingsScreen = () => {
       setNameModalVisible(false);
   }
 
-  const openAppSettings = () => Platform.OS !== 'web' && Linking.openSettings();
-  const openPrivacyPolicy = () => Linking.openURL('https://reklamour.pl').catch(() => {});
+  const openAppSettings = async () => {
+    if (Platform.OS !== 'web') {
+      try {
+        await Linking.openSettings();
+      } catch (e) {}
+    }
+  };
+
+  const openPrivacyPolicy = async () => {
+    try {
+      await Linking.openURL('https://reklamour.pl');
+    } catch (e) {}
+  };
 
   const notificationModeOptions = [
-    { label: 'Tylko moje i nieprzypisane', value: 'assigned' },
-    { label: 'Wszystkie czaty', value: 'all' },
+    { label: 'Tylko moje i nieprzypisane', shortLabel: 'Moje i nieprzyp.', value: 'assigned' },
+    { label: 'Wszystkie czaty', shortLabel: 'Wszystkie', value: 'all' },
   ];
 
-  const sections = useMemo(() => [
+  const currentNotificationShort = notificationModeOptions.find(o => o.value === notificationMode)?.shortLabel || '';
+  const selectionOptions = notificationModeOptions.map(o => ({ label: o.label, value: o.value }));
+
+  const sections = useMemo<SettingsSection[]>(() => [
     {
       title: 'Ustawienia Główne',
       items: [
@@ -117,6 +163,11 @@ const SettingsScreen = () => {
           value: notificationStatus === null ? '...' : (notificationStatus ? 'Włączone' : 'Wyłączone'), 
           onPress: openAppSettings 
         },
+        {
+          id: 'animations',
+          label: 'Animacje interfejsu',
+          icon: 'options-outline'
+        },
       ]
     },
     {
@@ -126,7 +177,7 @@ const SettingsScreen = () => {
           id: 'chatNotifications',
           label: 'Otrzymuj powiadomienia',
           icon: 'chatbubble-ellipses-outline',
-          value: notificationMode === 'all' ? 'Wszystkie czaty' : 'Tylko moje i nieprzypisane',
+          value: currentNotificationShort,
           onPress: () => setModeSelectionModalVisible(true)
         }
       ]
@@ -151,20 +202,23 @@ const SettingsScreen = () => {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: themeColors.background }}>
+    <TabTransition tabIndex={3} style={{ flex: 1, backgroundColor: themeColors.background }}>
+
       <ConfirmationModal visible={logoutModalVisible} onClose={() => setLogoutModalVisible(false)} title="Wylogowanie" message="Czy na pewno chcesz się wylogować?" confirmText="Wyloguj się" cancelText="Anuluj" onConfirm={handleLogout} variant="destructive" />
-      <SelectionModal visible={modeSelectionModalVisible} onClose={() => setModeSelectionModalVisible(false)} title="Wybierz tryb powiadomień" options={notificationModeOptions} onSelect={handleModeUpdate} currentValue={notificationMode} />
+      <SelectionModal visible={modeSelectionModalVisible} onClose={() => setModeSelectionModalVisible(false)} title="Wybierz tryb powiadomień" options={selectionOptions} onSelect={handleModeUpdate} currentValue={notificationMode} />
       
-      <Modal visible={isNameModalVisible} transparent={true} animationType="fade" onRequestClose={() => setNameModalVisible(false)}>
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalBackdrop}>
+      <AnimatedModal visible={isNameModalVisible} onClose={() => setNameModalVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: '100%' }}>
             <View style={[styles.modalContainer, { backgroundColor: themeColors.card }]}>
                 <Text style={[styles.modalTitle, { color: themeColors.text }]}>Zmień swój pseudonim</Text>
                 <TextInput 
+                    nativeID="settings-display-name"
                     style={[styles.input, { color: themeColors.text, backgroundColor: themeColors.background, borderColor: themeColors.border }]} 
                     value={tempDisplayName} 
                     onChangeText={setTempDisplayName} 
                     placeholder="Wpisz pseudonim" 
                     placeholderTextColor={themeColors.textMuted}
+                    autoComplete="name"
                 />
                 <View style={styles.modalActions}>
                     <TouchableOpacity style={styles.modalButton} onPress={() => setNameModalVisible(false)}><Text style={{ color: themeColors.text }}>Anuluj</Text></TouchableOpacity>
@@ -172,7 +226,7 @@ const SettingsScreen = () => {
                 </View>
             </View>
         </KeyboardAvoidingView>
-      </Modal>
+      </AnimatedModal>
 
       <View style={[styles.headerArea, { backgroundColor: themeColors.background }]}>
         <View style={[styles.headerContainer, { borderBottomColor: themeColors.border }]}>
@@ -202,9 +256,20 @@ const SettingsScreen = () => {
                   borderWidth: section.isDestructive ? 1 : StyleSheet.hairlineWidth
                 }
             ]}>
-              {section.items.map((item, index) => (
-                <SettingRow key={item.id} item={item} isFirst={index === 0} isLast={index === section.items.length - 1} themeColors={themeColors} />
-              ))}
+              {section.items.map((item, index) => {
+                if (item.id === 'animations') {
+                  return (
+                    <View key={item.id} style={[styles.settingRow, ! (index === 0) && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: themeColors.border }]}>
+                      <Ionicons name={item.icon} size={22} color={item.iconColor || themeColors.textMuted} style={styles.settingIcon}/>
+                      <Text style={[styles.settingLabel, { color: item.textColor || themeColors.text }]} numberOfLines={1} ellipsizeMode="tail">{item.label}</Text>
+                      <View style={styles.settingValueContainer}>
+                        <Switch value={!!animationsEnabled} onValueChange={toggleAnimations} thumbColor={animationsEnabled ? themeColors.tint : undefined} trackColor={{ true: themeColors.tint + '66', false: undefined }} />
+                      </View>
+                    </View>
+                  );
+                }
+                return <SettingRow key={item.id} item={item} isFirst={index === 0} isLast={index === section.items.length - 1} themeColors={themeColors} />
+              })}
             </View>
           </View>
         ))}
@@ -214,7 +279,7 @@ const SettingsScreen = () => {
             <Text style={[styles.footerText, { color: themeColors.textMuted }]}>Wersja {APP_VERSION}</Text>
         </View>
       </ScrollView>
-    </View>
+    </TabTransition>
   );
 };
 
@@ -233,9 +298,9 @@ const styles = StyleSheet.create({
   listContainer: { marginHorizontal: 15, borderRadius: 12, overflow: 'hidden' },
   settingRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, height: 52 },
   settingIcon: { marginRight: 15, width: 22 },
-  settingLabel: { fontSize: 16, flex: 1 },
-  settingValueContainer: { flexDirection: 'row', alignItems: 'center' },
-  settingValue: { fontSize: 16, marginRight: 5 },
+  settingLabel: { fontSize: 16, flex: 1, flexShrink: 1 },
+  settingValueContainer: { flexDirection: 'row', alignItems: 'center', maxWidth: '50%' },
+  settingValue: { fontSize: 16, marginRight: 5, textAlign: 'right' },
   appInfoFooter: { marginTop: 10, alignItems: 'center' },
   footerText: { fontSize: 12, lineHeight: 18 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },

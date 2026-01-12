@@ -1,9 +1,9 @@
 
-import { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase';
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '@/hooks/useAuth';
+import { db } from '@/lib/firebase';
 import { Chat } from '@/schemas';
+import { collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
 
 export const useChats = () => {
   const [chats, setChats] = useState<Chat[]>([]);
@@ -47,6 +47,12 @@ export const useChats = () => {
           activeAdminId: data.activeAdminId || null,
           assignedAdminId: data.assignedAdminId || null,
           isBlocked: data.isBlocked || false,
+          // Denormalized ban fields (may be absent on older docs)
+          userUid: data.userUid || null,
+          userIsBanned: typeof data.userIsBanned === 'boolean' ? data.userIsBanned : false,
+          bannedUntil: data.bannedUntil || null,
+          banReason: data.banReason || null,
+          bannedAt: data.bannedAt || null,
           lastPushAt: data.lastPushAt || null,
         } as Chat;
       });
