@@ -1,11 +1,11 @@
 
-import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { AiConversation } from '@/schemas';
+import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
 
 export const useAiChats = () => {
-  const [aiChats, setAiChats] = useState<AiConversation[]>([]);
+  const [aiChats, setAiChats] = useState<Partial<AiConversation>[]>([]);
 
   useEffect(() => {
     const aiChatsCollection = collection(db, 'ai_conversations');
@@ -23,7 +23,7 @@ export const useAiChats = () => {
           status: data.status,
           searchableContent: data.searchableContent,
           tags: data.tags,
-        } as AiConversation;
+        } as Partial<AiConversation>;
       });
       setAiChats(chatsData);
     }, (error) => {

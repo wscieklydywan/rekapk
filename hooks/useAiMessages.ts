@@ -1,11 +1,11 @@
 
-import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
 import { Message } from '@/schemas';
+import { addDoc, collection, onSnapshot, orderBy, query, serverTimestamp } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
 
 export const useAiMessages = (chatId: string) => {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Partial<Message>[]>([]);
 
   useEffect(() => {
     if (!chatId) {
@@ -29,7 +29,7 @@ export const useAiMessages = (chatId: string) => {
           isAiContext: data.isAiContext,
           isAiContextFooter: data.isAiContextFooter,
           aiRole: data.aiRole,
-        } as Message;
+        } as Partial<Message>;
       });
       setMessages(messagesData);
     }, (error) => {

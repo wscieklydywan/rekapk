@@ -1,8 +1,16 @@
 
-import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { ContactMessage } from '@/schemas';
+import type { Timestamp } from 'firebase/firestore';
+import { collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
+
+interface ContactMessage {
+  id: string;
+  text?: string;
+  timestamp?: Timestamp;
+  resolved?: boolean;
+  [key: string]: any;
+}
 
 export const useContactMessages = () => {
   const [messages, setMessages] = useState<ContactMessage[]>([]);

@@ -1,11 +1,11 @@
 
-import { useState, useEffect } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { AdminUser } from '@/schemas';
+import { User } from '@/schemas';
+import { collection, getDocs } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
 
 export const useAdmins = () => {
-  const [admins, setAdmins] = useState<AdminUser[]>([]);
+  const [admins, setAdmins] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -13,7 +13,7 @@ export const useAdmins = () => {
       try {
         const adminsCollection = collection(db, 'admin_users');
         const adminSnapshot = await getDocs(adminsCollection);
-        const adminList = adminSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AdminUser));
+        const adminList = adminSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
         setAdmins(adminList);
       } catch (error) {
         console.error("Error fetching admins: ", error);
