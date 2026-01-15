@@ -158,7 +158,7 @@ const DismissibleBanner = ({
         style={[
           styles.container,
           // make banner slightly higher (closer to top) and allow for safe-area
-          { top: Math.max(5, insets.top + 1) },
+          { top: Math.max(-1, insets.top - 5) },
           // combine base entrance offset with live gesture offset; keep X translation for horizontal swipes
           { transform: [{ translateY: Animated.add(baseY, gestureY) }, { translateX }] },
         ]} 
@@ -182,8 +182,8 @@ const DismissibleBanner = ({
             style={[
               styles.banner,
               isFlash
-                ? { borderRadius: 0, width: '100%', shadowOpacity: 0, elevation: 0, paddingTop: Math.max(18, insets.top + 8) }
-                : { paddingVertical: 18, paddingHorizontal: 20, width: bannerWidth },
+                ? { borderRadius: 0, width: '100%', shadowOpacity: 0, elevation: 0, paddingTop: Math.max(45, insets.top + 35), paddingBottom: 45 }
+                : { paddingVertical: 45, paddingHorizontal: 20, width: bannerWidth },
               { backgroundColor: resolvedBackground },
               style,
             ]}
@@ -228,7 +228,7 @@ const styles = StyleSheet.create({
   banner: {
     minWidth: '80%',
     borderRadius: 14,
-    paddingVertical: 18,
+    paddingVertical: 45,
     paddingHorizontal: 18,
     shadowColor: '#000',
     // lower shadow intensity to reduce compositing cost
