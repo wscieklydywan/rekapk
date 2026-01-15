@@ -1,15 +1,17 @@
 
-import { useEffect } from 'react';
+import { DebugProvider } from '@/contexts/DebugContext';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
-import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { usePresence } from '@/hooks/usePresence';
-import { useRouter, useSegments, Slot } from 'expo-router';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { usePushNotifications } from '@/hooks/usePushNotifications';
 import * as Notifications from 'expo-notifications';
+import { Slot, useRouter, useSegments } from 'expo-router';
+import { useEffect } from 'react';
+import { Platform, UIManager } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import FlashMessage from 'react-native-flash-message';
 import { ChatProvider } from './contexts/ChatProvider';
 import { FormProvider } from './contexts/FormProvider';
+import { NotificationProvider } from './contexts/NotificationContext';
 import { SessionProvider } from './contexts/SessionContext';
 
 const InitialLayout = () => {
@@ -29,10 +31,18 @@ const InitialLayout = () => {
     }
   }, [user, loading, segments, router]);
 
+  // Enable LayoutAnimation on Android for smooth layout transitions
+  useEffect(() => {
+    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+      try { UIManager.setLayoutAnimationEnabledExperimental(true); } catch (e) { /* ignore */ }
+    }
+  }, []);
+
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
       const data = response.notification.request.content.data;
       if (data && data.chatId) {
+        try { require('@/app/contexts/NotificationContext').hideNotificationForChat(data.chatId); } catch (e) { /* ignore */ }
         router.push((`/conversation/${data.chatId}`) as any);
       } else if (data && data.formId) { 
         router.push((`/forms/${data.formId}`) as any);
@@ -50,14 +60,21 @@ const RootLayout = () => {
       <SessionProvider>
         <ChatProvider>
           <FormProvider>
-            <GestureHandlerRootView style={{ flex: 1 }}>
-              <SafeAreaProvider>
-                <SafeAreaView style={{ flex: 1 }}>
-                  <InitialLayout />
-                </SafeAreaView>
-              </SafeAreaProvider>
-              <FlashMessage position="top" floating={true} />
-            </GestureHandlerRootView>
+            <NotificationProvider>
+              <GestureHandlerRootView style={{ flex: 1 }}>
+                <SafeAreaProvider>
+                    <SafeAreaView style={{ flex: 1 }}>
+                      { (global as any).__DEV__ ? (
+                        <DebugProvider>
+                          <InitialLayout />
+                        </DebugProvider>
+                      ) : (
+                        <InitialLayout />
+                      ) }
+                    </SafeAreaView>
+                </SafeAreaProvider>
+              </GestureHandlerRootView>
+            </NotificationProvider>
           </FormProvider>
         </ChatProvider>
       </SessionProvider>

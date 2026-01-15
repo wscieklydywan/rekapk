@@ -10,18 +10,26 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { collection, doc, getDocs, writeBatch } from 'firebase/firestore';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Platform, ScrollView, StyleSheet, Text, useColorScheme, View } from 'react-native';
-import { FlatList, TouchableOpacity } from 'react-native-gesture-handler';
-import Animated, { Easing, FadeIn, FadeOut, Layout, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { AccessibilityInfo, ActivityIndicator, FlatList, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import type { SharedValue } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, FadeOut, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 import { ConfirmationModal } from '@/components/ConfirmationModal';
-import { showMessage } from 'react-native-flash-message';
+
+const ITEM_HEIGHT = 84; // approximate fixed height for chat items to help FlatList layout calculation
+
+import { showMessage } from '@/lib/showMessage';
 
 const statusColors = {
     active: '#3CB371',
     waiting: '#F2C037',
     closed: '#9B9B9B'
 };
+
+import { ANIM_FADE_DURATION, ANIM_TRANSLATE_DURATION } from '@/constants/animations';
+
+// Animation constants (shared across tabs)
+
 
 const getInitials = (name?: string, email?: string): string => {
     if (name) {
@@ -82,38 +90,59 @@ interface ChatListItemProps {
     item: Chat;
     themeColors: { [key: string]: string };
     filter: FilterType;
-    selectionMode: boolean;
+    // NOTE: we avoid passing `selectionMode` as a prop that triggers rerenders for every item.
+    // Instead we pass a shared value for animations and a ref for JS checks.
+    selectionShared?: SharedValue<number>;
+    selectionModeRef?: React.MutableRefObject<boolean>;
     onSelect: (id: string) => void;
     onDeselect: (id: string) => void;
     isSelected: boolean;
     assignedAdmin?: User | null;
 }
 
-const ChatListItem = React.memo(({ item, themeColors, filter, selectionMode, onSelect, onDeselect, isSelected, assignedAdmin }: ChatListItemProps) => {
+const ChatListItemComponent = ({ item, themeColors, filter, selectionShared, selectionModeRef, onSelect, onDeselect, isSelected, assignedAdmin }: ChatListItemProps) => {
     const router = useRouter();
 
+    // Use a helper to read current selection mode for JS handlers without causing rerenders
+    const isSelectionMode = useCallback(() => !!selectionModeRef?.current, [selectionModeRef]);
+
+    const formatChatTimestamp = (ts?: any) => {
+        if (!ts) return '';
+        const date = ts.toDate ? ts.toDate() : new Date(ts);
+        const now = new Date();
+        const isToday = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+        if (isToday) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        const yesterday = new Date(now);
+        yesterday.setDate(now.getDate() - 1);
+        const isYesterday = date.getFullYear() === yesterday.getFullYear() && date.getMonth() === yesterday.getMonth() && date.getDate() === yesterday.getDate();
+        if (isYesterday) return 'wczoraj';
+
+        // older: show localized short date
+        return date.toLocaleDateString();
+    };
+
     const handlePress = () => {
-        if (selectionMode) {
+        if (isSelectionMode()) {
             isSelected ? onDeselect(item.id) : onSelect(item.id);
         } else {
             const contactName = encodeURIComponent(item.userInfo.contact || '');
+            // If a notification banner is shown for this specific chat, hide it when user opens it directly from list
+            try { require('@/app/contexts/NotificationContext').hideNotificationForChat(item.id); } catch (e) { /* ignore */ }
             router.push((`/conversation/${item.id}?status=${item.status}&lastFilter=${filter}&contactName=${contactName}`) as any);
         }
     };
 
     const handleLongPress = () => {
-        if (!selectionMode) {
+        if (!isSelectionMode()) {
             onSelect(item.id);
         }
     };
     
     const animatedContentStyle = useAnimatedStyle(() => {
-        return {
-            marginLeft: withTiming(selectionMode ? 40 : 0, {
-                duration: 250,
-                easing: Easing.inOut(Easing.ease),
-            }),
-        };
+        const target = (selectionShared ? (selectionShared.value ? 40 : 0) : (isSelectionMode() ? 40 : 0));
+        const tx = withTiming(target, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) });
+        return { transform: [{ translateX: tx }] };
     });
 
     const messagePreview = useMemo(() => item.lastMessage ? (item.lastMessageSender === 'admin' ? `Ty: ${item.lastMessage}` : item.lastMessage) : 'Oczekiwanie na wiadomość...', [item.lastMessage, item.lastMessageSender]);
@@ -142,12 +171,17 @@ const ChatListItem = React.memo(({ item, themeColors, filter, selectionMode, onS
 
     return (
         <TouchableOpacity onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomColor: themeColors.border }, isSelected && { backgroundColor: themeColors.selection }]}>
-            {selectionMode && (
-                <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={styles.checkboxContainer}>
+            {/* Checkbox: always rendered, visibility driven by a shared animated value to avoid mount/unmount and large synchronous commits */}
+            <Animated.View style={[styles.checkboxContainer]} pointerEvents={isSelected ? 'auto' : 'none'}>
+                {/* checkbox animation: opacity/scale with timing for a smoother feel */}
+                <Animated.View style={useAnimatedStyle(() => {
+                    const v = selectionShared ? selectionShared.value : (isSelectionMode() ? 1 : 0);
+                    return { opacity: withTiming(v, { duration: ANIM_FADE_DURATION }), transform: [{ scale: withTiming(0.9 + 0.1 * v, { duration: ANIM_FADE_DURATION }) }] };
+                })}>
                     <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={isSelected ? themeColors.tint : themeColors.textMuted}/>
                 </Animated.View>
-            )}
-            
+            </Animated.View>
+
             <Animated.View style={[styles.slidingContainer, animatedContentStyle]}>
                 <View style={styles.avatarContainer}>
                     <View style={[styles.avatar, { backgroundColor: themeColors.input }]}> 
@@ -158,12 +192,12 @@ const ChatListItem = React.memo(({ item, themeColors, filter, selectionMode, onS
                             </View>
                         )}
                     </View>
-                    {isUnread && !selectionMode && (
+                    {isUnread && (
                         <View style={[styles.unreadBadge, { backgroundColor: themeColors.tint, borderColor: themeColors.background }]}>
                             <Text style={styles.unreadCount}>{unreadCountForBadge}</Text>
                         </View>
                     )}
-                    {assignedAdmin && !selectionMode && (
+                    {assignedAdmin && (
                         <View style={[styles.adminBadge, { borderColor: themeColors.background }]}>
                            <Text style={styles.adminBadgeText}>{getInitials(assignedAdmin.displayName, assignedAdmin.email)}</Text>
                         </View>
@@ -175,11 +209,17 @@ const ChatListItem = React.memo(({ item, themeColors, filter, selectionMode, onS
                 </View>
             </Animated.View>
             <View style={styles.metaContainer}>
-                <Text style={[styles.timestamp, { color: themeColors.textMuted }]}>{item.lastMessageTimestamp?.toDate ? new Date(item.lastMessageTimestamp.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</Text>
+                <Text style={[styles.timestamp, { color: themeColors.textMuted }]}>{formatChatTimestamp(item.lastMessageTimestamp)}</Text>
                 <View style={statusInfo.style}><Text style={styles.statusText}>{statusInfo.text}</Text></View>
             </View>
         </TouchableOpacity>
     );
+};
+
+const ChatListItem = React.memo(ChatListItemComponent, (prev, next) => {
+    return prev.item.id === next.item.id &&
+        prev.isSelected === next.isSelected &&
+        (prev.assignedAdmin?.id || null) === (next.assignedAdmin?.id || null);
 });
 
 const ActiveChatsScreen = () => {
@@ -197,6 +237,19 @@ const ActiveChatsScreen = () => {
     // Prevent other modals from appearing immediately after this one closes (fixes the brief flash/blue-dot on web)
     const modalLockRef = useRef(false);
     const modalTimerRef = useRef<number | null>(null);
+
+
+
+    // Shared value & ref to avoid forcing full-list React rerenders when toggling selection mode.
+    const selectionShared = useSharedValue(selectionMode ? 1 : 0);
+    const selectionModeRef = useRef(selectionMode);
+    useEffect(() => { selectionModeRef.current = selectionMode; selectionShared.value = withTiming(selectionMode ? 1 : 0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) }); }, [selectionMode]);
+
+    // Selected set for fast lookup; used in stable renderItem to avoid O(n) includes
+    const selectedSet = useMemo(() => new Set(selectedChats), [selectedChats]);
+
+    // NOTE: renderItem is defined *after* handlers (handleSelect / handleDeselect) to avoid Temporal Dead Zone errors
+    // See below where it is defined.
 
     const closeModal = () => {
         if (Platform.OS === 'web' && typeof document !== 'undefined') {
@@ -276,15 +329,31 @@ const ActiveChatsScreen = () => {
 
     useEffect(() => { navigation.setOptions({ headerShown: false }); }, [navigation]);
 
-    const enterSelectionMode = () => setSelectionMode(true);
+    const enterSelectionMode = () => {
+        // Ensure selection logic flips immediately for handlers (so taps start selecting immediately)
+        selectionModeRef.current = true;
+        setSelectionMode(true);
+        // Also animate shared value to 1 to show visuals
+        selectionShared.value = withTiming(1, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) });
+    };
+
     const exitSelectionMode = () => {
+        // Immediately clear selection state so UI highlights disappear at once
+        selectionModeRef.current = false;
         setSelectionMode(false);
         setSelectedChats([]);
+
+        // Animate the shared value (controls both header opacity and item translateX)
+        selectionShared.value = withTiming(0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) });
     };
 
     const handleSelect = useCallback((chatId: string) => {
-        if (!selectionMode) enterSelectionMode();
-        setSelectedChats(prev => [...prev, chatId]);
+        if (!selectionMode) {
+            enterSelectionMode();
+            setSelectedChats(prev => [...prev, chatId]);
+        } else {
+            setSelectedChats(prev => [...prev, chatId]);
+        }
     }, [selectionMode]);
 
     const handleDeselect = useCallback((chatId: string) => {
@@ -327,6 +396,25 @@ const ActiveChatsScreen = () => {
         });
     };
     
+    const renderItem = useCallback(({ item }: { item: Chat }) => {
+        const admin = item.assignedAdminId ? admins[item.assignedAdminId] : undefined;
+        const isSelected = selectedSet.has(item.id);
+
+        return (
+            <ChatListItem
+                item={item}
+                themeColors={themeColors}
+                filter={filter}
+                selectionShared={selectionShared}
+                selectionModeRef={selectionModeRef}
+                isSelected={isSelected}
+                onSelect={handleSelect}
+                onDeselect={handleDeselect}
+                assignedAdmin={admin}
+            />
+        );
+    }, [admins, themeColors, filter, selectedSet, selectionShared, handleSelect, handleDeselect]);
+    
     const filteredChats = useMemo(() => {
         if (filter === 'active') return allChats.filter((chat: Chat) => chat.status === 'active');
         if (filter === 'waiting') return allChats.filter((chat: Chat) => chat.status === 'waiting');
@@ -360,12 +448,9 @@ const ActiveChatsScreen = () => {
 
     useEffect(() => { prevFilterIndexRef.current = filterIndex; }, [filterIndex]);
 
-    const headerOpacityAnim = useSharedValue(selectionMode ? 1 : 0);
-    useEffect(() => {
-        headerOpacityAnim.value = withTiming(selectionMode ? 1 : 0, { duration: 250, easing: Easing.inOut(Easing.ease) });
-    }, [selectionMode]);
-    const defaultHeaderStyle = useAnimatedStyle(() => ({ opacity: 1 - headerOpacityAnim.value }));
-    const selectionHeaderStyle = useAnimatedStyle(() => ({ opacity: headerOpacityAnim.value }));
+    // Header opacity driven by selectionShared so header and items animate in sync
+    const defaultHeaderStyle = useAnimatedStyle(() => ({ opacity: 1 - (selectionShared ? selectionShared.value : 0) }));
+    const selectionHeaderStyle = useAnimatedStyle(() => ({ opacity: (selectionShared ? selectionShared.value : 0) }));
 
     return (
         <TabTransition tabIndex={0} style={{ flex: 1, backgroundColor: themeColors.background }}>
@@ -403,13 +488,16 @@ const ActiveChatsScreen = () => {
                 </Animated.View>
             </View>
 
-            {!selectionMode && (
-                 <View style={[styles.filterOuterContainer, { borderBottomColor: themeColors.border }]}>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterContentContainer}>
-                        {filters.map(f => (<TouchableOpacity key={f.key} onPress={() => setFilter(f.key)} style={[styles.filterButton, filter === f.key && { backgroundColor: themeColors.tint }]} ><Text style={[styles.filterText, { color: filter === f.key ? 'white' : themeColors.textMuted }]}>{f.title}</Text></TouchableOpacity>))}
-                    </ScrollView>
-                 </View>
-            )}
+            {/* Always render filters to avoid list shifting when entering/exiting selection mode. */}
+            <Animated.View style={[styles.filterOuterContainer, { borderBottomColor: themeColors.border }, useAnimatedStyle(() => ({ opacity: 1 - (selectionShared ? selectionShared.value * 0.15 : 0) }))]} pointerEvents={selectionMode ? 'none' : 'auto'}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterContentContainer}>
+                    {filters.map(f => (
+                        <TouchableOpacity key={f.key} onPress={() => setFilter(f.key)} style={[styles.filterButton, filter === f.key && { backgroundColor: themeColors.tint }]}>
+                            <Text style={[styles.filterText, { color: filter === f.key ? 'white' : themeColors.textMuted }]}>{f.title}</Text>
+                        </TouchableOpacity>
+                    ))}
+                </ScrollView>
+            </Animated.View>
 
             {
                 // animate filter content like a single sheet — direction based on filter index diff
@@ -428,33 +516,18 @@ const ActiveChatsScreen = () => {
                     }
 
                     return (
-                        <Animated.View key={`filter-${filter}`} entering={enterAnim} exiting={exitAnim} layout={Layout.duration(enterDuration)} style={{ flex: 1 }}>
+                        <Animated.View key={`filter-${filter}`} entering={enterAnim} exiting={exitAnim} style={{ flex: 1 }}>
                             {loading && allChats.length === 0 ? (
                                 <ActivityIndicator style={{ flex: 1, justifyContent: 'center' }} />
                             ) : (
                                 <FlatList<Chat>
                                     data={filteredChats}
                                     keyExtractor={(item) => item.id}
-                                    renderItem={({ item }) => {
-                                        const admin = item.assignedAdminId ? admins[item.assignedAdminId] : undefined;
-
-                                        return (
-                                            <ChatListItem 
-                                                item={item} 
-                                                themeColors={themeColors} 
-                                                filter={filter} 
-                                                selectionMode={selectionMode} 
-                                                isSelected={selectedChats.includes(item.id)} 
-                                                onSelect={handleSelect} 
-                                                onDeselect={handleDeselect} 
-                                                assignedAdmin={admin}
-                                            />
-                                        );
-                                    }}
+                                    renderItem={renderItem}
                                     ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
                                     style={{ backgroundColor: themeColors.background }}
-                                    contentContainerStyle={{ paddingTop: selectionMode ? 10 : 0 }}
-                                    extraData={{ selectionMode, selectedChats, admins }}
+                                    contentContainerStyle={{ paddingTop: 10 }}
+                                    extraData={selectedChats}
                                 />
                             )}
                         </Animated.View>

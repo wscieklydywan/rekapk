@@ -1,6 +1,7 @@
 
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import TabTransition from '@/components/TabTransition';
+import { ANIM_FADE_DURATION, ANIM_TRANSLATE_DURATION } from '@/constants/animations';
 import { Colors } from '@/constants/theme';
 import { db } from '@/lib/firebase';
 import { Ionicons } from '@expo/vector-icons';
@@ -45,14 +46,14 @@ const AiConversationListItem = ({ item, themeColors, selectionMode, isSelected, 
 
     const animatedContentStyle = useAnimatedStyle(() => {
         return {
-            marginLeft: withTiming(selectionMode ? 40 : 0, { duration: 120, easing: Easing.inOut(Easing.ease) }),
+            marginLeft: withTiming(selectionMode ? 40 : 0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) }),
         };
     });
 
     return (
         <TouchableOpacity onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomColor: themeColors.border }, isSelected && { backgroundColor: themeColors.selection }]}>
             {selectionMode && (
-                <Animated.View entering={FadeIn.duration(120)} exiting={FadeOut.duration(120)} style={styles.checkboxContainer}>
+                <Animated.View entering={FadeIn.duration(ANIM_FADE_DURATION)} exiting={FadeOut.duration(ANIM_FADE_DURATION)} style={styles.checkboxContainer}>
                     <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={isSelected ? themeColors.tint : themeColors.textMuted}/>
                 </Animated.View>
             )}
@@ -225,7 +226,7 @@ const AiArchiveScreen = () => {
     };
     
     const headerOpacityAnim = useSharedValue(selectionMode ? 1 : 0); // CORRECTED INITIALIZATION
-    useEffect(() => { headerOpacityAnim.value = withTiming(selectionMode ? 1 : 0, { duration: 50 }); }, [selectionMode]);
+    useEffect(() => { headerOpacityAnim.value = withTiming(selectionMode ? 1 : 0, { duration: ANIM_FADE_DURATION }); }, [selectionMode]);
     const defaultHeaderStyle = useAnimatedStyle(() => ({ opacity: 1 - headerOpacityAnim.value }));
     const selectionHeaderStyle = useAnimatedStyle(() => ({ opacity: headerOpacityAnim.value }));
 

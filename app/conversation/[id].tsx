@@ -10,18 +10,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { collection, doc, getDoc, getDocs, increment, limit, onSnapshot, orderBy, query, startAfter, Timestamp, updateDoc, writeBatch } from 'firebase/firestore';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, FlatList, KeyboardAvoidingView, Platform, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, Animated, AppState, FlatList, KeyboardAvoidingView, LayoutAnimation, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AnimatedModal from '@/components/AnimatedModal';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import TabTransition from '@/components/TabTransition';
-import { showMessage } from 'react-native-flash-message';
+import { showMessage } from '@/lib/showMessage';
 import { Menu, MenuOption, MenuOptions, MenuProvider, MenuTrigger } from 'react-native-popup-menu';
 
 const GROUP_THRESHOLD_MINUTES = 3;
 const MESSAGES_LIMIT = 50; // number of messages to keep in live subscription
+// Dev-only: enable verbose message subscription logging when running in dev
+const DEV_MSG_LOGGING = (global as any).__DEV__ || process.env.NODE_ENV === 'development';
 
-const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins, showAdminTag, onRetry }: { message: Message; prevMessage?: Message; nextMessage?: Message; themeColors: any; admins: { [key: string]: User }, showAdminTag?: boolean, onRetry?: (m: Message) => void }) => {
+const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins, showAdminTag, onRetry, index, activeMessageId, activeMessageIndex, onToggleActive, showTimeSeparator, separatorLabel, listInverted }: { message: Message; prevMessage?: Message; nextMessage?: Message; themeColors: any; admins: { [key: string]: User }, showAdminTag?: boolean, onRetry?: (m: Message) => void, index: number, activeMessageId: string | null, activeMessageIndex: number | null, onToggleActive: (id: string | null, idx?: number) => void, showTimeSeparator?: boolean, separatorLabel?: string | null, listInverted?: boolean }) => {
     const isMyMessage = message.sender === 'admin';
 
     if (message.sender === 'system') {
@@ -65,6 +68,49 @@ const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins,
         { marginBottom: isLastInGroup ? 2 : 1 }
     ];
 
+    const tooltipTimerRef = useRef<number | null>(null);
+    const timestampOpacity = useRef(new Animated.Value(0)).current;
+
+    const formattedTime = message.createdAt?.toDate ? new Date(message.createdAt.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+    const isActive = activeMessageId === message.id;
+
+    // Show/hide timestamp with proper fade-in and fade-out (keep element in tree during fade-out)
+    const [showTimestampLocal, setShowTimestampLocal] = useState(false);
+    useEffect(() => {
+        let anim: Animated.CompositeAnimation | null = null;
+        if (isActive) {
+            // keep timestamp in tree while animating in
+            setShowTimestampLocal(true);
+
+            if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current);
+            tooltipTimerRef.current = window.setTimeout(() => {
+                try { onToggleActive(null); } catch(e) { /* ignore */ }
+            }, 3000);
+
+            // fade in timestamp (also visible on web)
+            anim = Animated.timing(timestampOpacity, { toValue: 1, duration: 180, useNativeDriver: true });
+            anim.start();
+        } else {
+            if (tooltipTimerRef.current) { clearTimeout(tooltipTimerRef.current); tooltipTimerRef.current = null; }
+
+            // fade out timestamp, then remove from tree
+            anim = Animated.timing(timestampOpacity, { toValue: 0, duration: 140, useNativeDriver: true });
+            anim.start(({ finished }) => {
+                if (finished) setShowTimestampLocal(false);
+            });
+        }
+
+        return () => { if (anim && (anim as any).stop) try { (anim as any).stop(); } catch(e) {} };
+    }, [isActive]);
+
+
+
+    // clear any lingering timer when component unmounts
+    useEffect(() => {
+        return () => { if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current); };
+    }, []);
+
     if (isMyMessage) {
         bubbleStyles.push(styles.myMessageBubble, { backgroundColor: themeColors.tint });
         if (isSolo) bubbleStyles.push(styles.soloBubble);
@@ -80,46 +126,71 @@ const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins,
     }
 
     return (
-        <View style={messageRowStyle}>
-            {!isMyMessage && (
-                <View style={styles.avatarContainer}>
-                    {isLastInGroup ? (
-                        <Ionicons 
-                            name={message.sender === 'ai' ? "hardware-chip-outline" : "person-circle-outline"} 
-                            size={30} 
-                            color={themeColors.textMuted} 
-                        />
-                    ) : (
-                        <View style={{width: 30}} />
-                    )}
+        <>
+            {!listInverted && showTimeSeparator && separatorLabel && (
+                <View style={styles.timeSeparatorFullRow} pointerEvents="none">
+                    <View style={[styles.timeSeparatorPill, { backgroundColor: themeColors.input }]}> 
+                        <Text style={[styles.timeSeparatorText, { color: themeColors.textMuted }]}>{separatorLabel}</Text>
+                    </View>
                 </View>
             )}
-            <View style={styles.messageContentContainer}>
-                {showAdminName && adminName && (
-                    <Text style={[styles.senderName, { alignSelf: 'flex-end', marginRight: 15, color: themeColors.textMuted }]}> 
-                        {adminName}
-                    </Text>
+            <View style={messageRowStyle}>
+                {!isMyMessage && (
+                    <View style={styles.avatarContainer}>
+                        {isLastInGroup ? (
+                            <Ionicons 
+                                name={message.sender === 'ai' ? "hardware-chip-outline" : "person-circle-outline"} 
+                                size={30} 
+                                color={themeColors.textMuted} 
+                            />
+                        ) : (
+                            <View style={{width: 30}} />
+                        )}
+                    </View>
                 )}
-                {!isMyMessage && isFirstInGroup && (
-                    <Text style={[styles.senderName, { color: themeColors.textMuted }]}>
-                        {message.sender === 'ai' ? 'Konsultant AI' : 'Klient'}
-                    </Text>
-                )}
-                <View style={bubbleStyles}>
-                    <Text style={isMyMessage ? styles.myMessageText : [styles.theirMessageText, { color: themeColors.text }]}>
-                        {message.text}
-                    </Text>
-                    {message.pending && (
-                        <ActivityIndicator size="small" color={themeColors.tint} style={{ marginLeft: 8, marginTop: 6 }} />
+                <View style={styles.messageContentContainer}>
+                    {showAdminName && adminName && (
+                        <Text style={[styles.senderName, { alignSelf: 'flex-end', marginRight: 15, color: themeColors.textMuted }]}> 
+                            {adminName}
+                        </Text>
                     )}
-                    {message.failed && onRetry && (
-                        <TouchableOpacity onPress={() => onRetry(message)} style={{ marginTop: 6 }}>
-                            <Text style={{ color: themeColors.tint, fontSize: 13 }}>Retry</Text>
-                        </TouchableOpacity>
+                    {!isMyMessage && isFirstInGroup && (
+                        <Text style={[styles.senderName, { color: themeColors.textMuted }]}>
+                            {message.sender === 'ai' ? 'Konsultant AI' : 'Klient'}
+                        </Text>
                     )}
+
+                    <View>
+                        <Animated.View style={[styles.timestampContainer, { opacity: timestampOpacity, transform: [{ translateY: timestampOpacity.interpolate ? timestampOpacity.interpolate({ inputRange: [0, 1], outputRange: [6, 0] }) : 0 }] }]}>
+                            {showTimestampLocal && (
+                                <Text style={[styles.timestampText, isMyMessage ? { textAlign: 'right', color: '#999' } : { color: themeColors.textMuted }]}>{formattedTime}</Text>
+                            )}
+                        </Animated.View>
+
+                        <Pressable onPress={() => onToggleActive(message.id, index)} style={bubbleStyles} android_ripple={{ color: 'rgba(0,0,0,0.06)' }}>
+                            <Text style={isMyMessage ? styles.myMessageText : [styles.theirMessageText, { color: themeColors.text }]}>
+                                {message.text}
+                            </Text>
+                            {message.pending && (
+                                <ActivityIndicator size="small" color={themeColors.tint} style={{ marginLeft: 8, marginTop: 6 }} />
+                            )}
+                            {message.failed && onRetry && (
+                                <TouchableOpacity onPress={() => onRetry(message)} style={{ marginTop: 6 }}>
+                                    <Text style={{ color: themeColors.tint, fontSize: 13 }}>Retry</Text>
+                                </TouchableOpacity>
+                            )}
+                        </Pressable>
+                    </View>
                 </View>
             </View>
-        </View>
+            {listInverted && showTimeSeparator && separatorLabel && (
+                <View style={styles.timeSeparatorFullRow} pointerEvents="none">
+                    <View style={[styles.timeSeparatorPill, { backgroundColor: themeColors.input }]}> 
+                        <Text style={[styles.timeSeparatorText, { color: themeColors.textMuted }]}>{separatorLabel}</Text>
+                    </View>
+                </View>
+            )}
+        </>
     );
 };
 
@@ -147,9 +218,20 @@ const MemoMessageBubble = React.memo(MessageBubble, (prevProps, nextProps) => {
 
     if ((prevProps.showAdminTag || false) !== (nextProps.showAdminTag || false)) return false;
 
+    if ((prevProps.showTimeSeparator || false) !== (nextProps.showTimeSeparator || false)) return false;
+    if ((prevProps.separatorLabel || null) !== (nextProps.separatorLabel || null)) return false;
+    if ((prevProps.listInverted || false) !== (nextProps.listInverted || false)) return false;
+
     const prevAdminName = prevProps.admins?.[pm.adminId as string]?.displayName || prevProps.admins?.[pm.adminId as string]?.email || null;
     const nextAdminName = nextProps.admins?.[nm.adminId as string]?.displayName || nextProps.admins?.[nm.adminId as string]?.email || null;
     if (prevAdminName !== nextAdminName) return false;
+
+    // Re-render if active message changed and it affects this bubble
+    if (prevProps.activeMessageId !== nextProps.activeMessageId || prevProps.activeMessageIndex !== nextProps.activeMessageIndex) {
+        const affected = [prevProps.activeMessageId, nextProps.activeMessageId].some(a => a === pm.id || a === nm.id);
+        const indexAffected = typeof prevProps.activeMessageIndex === 'number' && (prevProps.activeMessageIndex === prevProps.index || nextProps.activeMessageIndex === prevProps.index);
+        if (affected || indexAffected) return false;
+    }
 
     return true;
 });
@@ -160,6 +242,7 @@ const ConversationScreen = () => {
     const { id: chatId, status: initialStatus, contactName: encodedContactName } = useLocalSearchParams<{ id: string; status?: Chat['status'], contactName?: string }>();
     const theme = useColorScheme() ?? 'light';
     const themeColors = Colors[theme];
+    const insets = useSafeAreaInsets();
 
     const [chat, setChat] = useState<Chat | null>(null);
     const chatRef = useRef<Chat | null>(null);
@@ -196,6 +279,51 @@ const ConversationScreen = () => {
     // Prevent other modals from appearing immediately after this one closes (fixes a brief "OK" flash)
     const modalLockRef = useRef(false);
     const modalTimerRef = useRef<number | null>(null);
+
+    // Active message tooltip control (only one active at a time)
+    const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
+    const [activeMessageIndex, setActiveMessageIndex] = useState<number | null>(null);
+    const listRef = useRef<FlatList<any> | null>(null);
+
+    const handleToggleActive = (id: string | null, idx?: number) => {
+        if (!id) {
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            setActiveMessageId(null);
+            setActiveMessageIndex(null);
+            return;
+        }
+        if (activeMessageId === id) {
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            setActiveMessageId(null);
+            setActiveMessageIndex(null);
+        } else {
+            // attempt to scroll the tapped item into view (place it lower on screen) then mark active
+            if (typeof idx === 'number' && listRef.current) {
+                try {
+                    // Scroll so that the tapped item itself is positioned lower (viewPosition 0.85)
+                    listRef.current.scrollToIndex({ index: idx, viewPosition: 0.85, animated: true });
+                } catch (e) {
+                    try {
+                        // If index not found / not rendered yet, nudge by scrolling a few items older as fallback
+                        const fallback = Math.min(Math.max(0, idx + 3), (visualData?.length || 0) - 1);
+                        listRef.current.scrollToIndex({ index: fallback, viewPosition: 0.9, animated: true });
+                    } catch (e2) {
+                        try { listRef.current.scrollToOffset({ offset: 0, animated: true }); } catch(e3) { /* ignore */ }
+                    }
+                }
+
+                // Slight delay to let scroll finish before activating the timestamp (avoids visual jumps)
+                setTimeout(() => {
+                    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                    setActiveMessageId(id); setActiveMessageIndex(typeof idx === 'number' ? idx : null);
+                }, 180);
+            } else {
+                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                setActiveMessageId(id);
+                setActiveMessageIndex(typeof idx === 'number' ? idx : null);
+            }
+        }
+    };
 
     const closeModal = () => {
         // On web, perform a double-blur and focus on body so Chrome doesn't restore focus outline
@@ -304,10 +432,26 @@ const ConversationScreen = () => {
                 const raw = await AsyncStorage.getItem(CACHE_KEY);
                 if (!raw) return;
                 const parsed = JSON.parse(raw) as { messages?: Array<any>, lastVisible?: number, lastVisibleDocId?: string };
-                if (!parsed || !parsed.messages || !parsed.messages.length) return;
+                if (!parsed || !parsed.messages || !parsed.messages.length) {
+                    cacheLoadedRef.current = true;
+                    return;
+                }
                 // convert stored timestamps (ms) back to Timestamp
                 const cached = parsed.messages.map(p => ({ ...p, createdAt: Timestamp.fromMillis(p.createdAt), pending: false, failed: false } as Message));
-                setLiveMessages(cached);
+                // Merge cached messages with any existing live messages, but prefer server/live if present
+                setLiveMessages((prev) => {
+                    if (!prev || prev.length === 0) return cached;
+                    const prevNewest = prev[0]?.createdAt?.toMillis?.() || 0;
+                    const cachedNewest = cached[0]?.createdAt?.toMillis?.() || 0;
+                    if (cachedNewest <= prevNewest) return prev; // keep newer server data
+                    const map = new Map<string, Message>();
+                    for (const m of [...prev, ...cached]) {
+                        if (!m || !m.id) continue;
+                        if (!map.has(m.id)) map.set(m.id, m);
+                    }
+                    const merged = Array.from(map.values()).sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+                    return merged;
+                });
                 lastVisibleTimestampRef.current = parsed.lastVisible || null;
                 lastVisibleDocIdRef.current = parsed.lastVisibleDocId || null;
                 // if we have docId, attempt to fetch its DocumentSnapshot to enable precise pagination
@@ -368,13 +512,59 @@ const ConversationScreen = () => {
                 if (!foundPrevAdmin) showAdminTag = true;
             }
 
-            return { message: item, prev, next, showAdminTag };
+            // Show a centered time/day separator when the neighboring message is on a different day
+            // or when more than 10 minutes passed since the neighboring message.
+            // We always attach the separator to the newer (later) message so that it appears
+            // in the correct visual position regardless of list inversion or data ordering.
+            let showTimeSeparator = false;
+            let separatorLabel: string | undefined = undefined;
+            try {
+                // Only compute a separator when we actually have two non-system messages with text
+                // Find the closest older message anywhere in `combinedMessages` (more robust than only checking prev/next)
+                if (item.createdAt && item.text && String(item.text).trim().length > 0 && item.sender !== 'system') {
+                    const itemMs = item.createdAt.toMillis();
+                    let closestOlderMs = -Infinity;
+                    let closestOlder: Message | undefined = undefined;
+                    for (const c of combinedMessages) {
+                        if (!c || !c.createdAt || !c.text) continue;
+                        if (String(c.text).trim().length === 0) continue;
+                        if (c.sender === 'system') continue;
+                        const cMs = c.createdAt.toMillis();
+                        if (cMs < itemMs && cMs > closestOlderMs) {
+                            closestOlderMs = cMs;
+                            closestOlder = c;
+                        }
+                    }
+
+                    if (closestOlder) {
+                        const olderMs = closestOlderMs;
+                        const newerMs = itemMs;
+                        const mins = (newerMs - olderMs) / (1000 * 60);
+                        const olderDate = new Date(olderMs);
+                        const newerDate = new Date(newerMs);
+                        const isDifferentDay = olderDate.getFullYear() !== newerDate.getFullYear() || olderDate.getMonth() !== newerDate.getMonth() || olderDate.getDate() !== newerDate.getDate();
+                        if (isDifferentDay) {
+                            showTimeSeparator = true;
+                            const today = new Date();
+                            const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+                            if (newerDate.getFullYear() === yesterday.getFullYear() && newerDate.getMonth() === yesterday.getMonth() && newerDate.getDate() === yesterday.getDate()) {
+                                separatorLabel = 'wczoraj';
+                            } else {
+                                separatorLabel = newerDate.toLocaleDateString();
+                            }
+                        } else if (mins >= 10) {
+                            showTimeSeparator = true;
+                            separatorLabel = new Date(item.createdAt.toMillis()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        }
+                    }
+                }
+            } catch (e) {
+                /* ignore */
+            }
+
+            return { message: item, prev, next, showAdminTag, showTimeSeparator, separatorLabel };
         });
     }, [combinedMessages]);
-
-    const renderItem = useCallback(({ item }: { item: { message: Message; prev?: Message; next?: Message; showAdminTag?: boolean } }) => {
-        return <MemoMessageBubble message={item.message} prevMessage={item.prev} nextMessage={item.next} themeColors={themeColors} admins={adminsMap} showAdminTag={item.showAdminTag} onRetry={handleRetry} />;
-    }, [themeColors, adminsMap]);
 
     const handleRetry = async (localMsg: any) => {
         if (!chatId || !user) return;
@@ -401,6 +591,7 @@ const ConversationScreen = () => {
                 lastMessage: localMsg.text,
                 lastMessageSender: 'admin',
                 lastMessageTimestamp: Timestamp.now(),
+                lastActivity: Timestamp.now(),
                 userUnread: increment(1),
             });
 
@@ -410,6 +601,10 @@ const ConversationScreen = () => {
             setLiveMessages(prev => prev.map(m => m.clientId === clientId ? { ...m, pending: false, failed: true } : m));
         }
     };
+
+    const renderItem = useCallback(({ item, index }: { item: { message: Message; prev?: Message; next?: Message; showAdminTag?: boolean; showTimeSeparator?: boolean; separatorLabel?: string }, index: number }) => {
+        return <MemoMessageBubble message={item.message} prevMessage={item.prev} nextMessage={item.next} themeColors={themeColors} admins={adminsMap} showAdminTag={item.showAdminTag} onRetry={handleRetry} index={index} activeMessageId={activeMessageId} activeMessageIndex={activeMessageIndex} onToggleActive={handleToggleActive} showTimeSeparator={item.showTimeSeparator} separatorLabel={item.separatorLabel} listInverted={true} />;
+    }, [themeColors, adminsMap, activeMessageId, activeMessageIndex, handleRetry, handleToggleActive]);
 
     const loadOlderMessages = async () => {
         if (!chatId || isLoadingMore || !hasMoreOlder) return;
@@ -483,7 +678,7 @@ const ConversationScreen = () => {
             try {
                 const docSnap = await getDoc(chatDocRef);
                 if (!docSnap.exists()) {
-                    console.log("Chat does not exist, navigating back.");
+                    console.warn("Chat does not exist, navigating back.");
                     router.back();
                     return;
                 }
@@ -557,8 +752,9 @@ const ConversationScreen = () => {
 
         const messagesQuery = query(collection(db, 'chats', chatId, 'messages'), orderBy('createdAt', 'desc'), limit(MESSAGES_LIMIT));
         const unsubMessages = onSnapshot(messagesQuery, (snapshot) => {
+
             if (firstSnapshotRef.current) {
-                // initial load -> populate live messages
+                // initial load -> populate live messages (merge-safe with cache)
                 const docs = snapshot.docs;
                 const msgs = docs
                     .map(doc => ({ ...doc.data(), id: doc.id } as Message))
@@ -569,15 +765,32 @@ const ConversationScreen = () => {
                         }
                         return hasText;
                     }); // ignore empty messages
-                // set live messages from initial snapshot
-                setLiveMessages(msgs);
-                lastVisibleTimestampRef.current = docs.length ? (docs[docs.length - 1].data() as any).createdAt?.toMillis?.() : null;
+
+                setLiveMessages((prev) => {
+                    // If we have cached messages already loaded, merge and prefer server for duplicates
+                    if (cacheLoadedRef.current && prev && prev.length > 0) {
+                        const map = new Map<string, Message>();
+                        for (const m of [...msgs, ...prev]) {
+                            if (!m || !m.id) continue;
+                            if (!map.has(m.id)) map.set(m.id, m);
+                        }
+                        const merged = Array.from(map.values()).sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+                        return merged;
+                    }
+                    // If server returned nothing but we had cached data, keep cached
+                    if (msgs.length === 0 && prev && prev.length > 0) return prev;
+                    // else use server-provided initial snapshot
+                    return msgs;
+                });
+
+                if (docs.length) lastVisibleTimestampRef.current = docs.length ? (docs[docs.length - 1].data() as any).createdAt?.toMillis?.() : null;
                 firstSnapshotRef.current = false;
                 setLoading(false);
                 return;
             }
 
-                    snapshot.docChanges().forEach((change) => {
+            snapshot.docChanges().forEach((change) => {
+
                 const docData = { ...change.doc.data(), id: change.doc.id } as Message & any;
                 const docClientId = (change.doc.data() as Partial<Message>)?.clientId;
 
@@ -589,6 +802,7 @@ const ConversationScreen = () => {
                     }
 
                     setLiveMessages((prev) => {
+
                         // If there is a local pending message with same clientId, replace it with server doc
                         if (docClientId) {
                             const idx = prev.findIndex(m => m.clientId === docClientId);
@@ -599,7 +813,30 @@ const ConversationScreen = () => {
                             }
                         }
 
-                        if (prev.find(m => m.id === docData.id || m.clientId === docClientId)) return prev;
+                        // If we already have an item with the same server id, replace it (ensures UI updates)
+                        const existingIndexById = prev.findIndex(m => m.id === docData.id);
+                        if (existingIndexById !== -1) {
+                            const next = [...prev];
+                            next[existingIndexById] = docData;
+                            return next;
+                        }
+
+                        // If we already have a local pending message with the same clientId, replace it
+                        const existingIndexByClient = docClientId ? prev.findIndex(m => m.clientId === docClientId) : -1;
+                        if (existingIndexByClient !== -1) {
+                            const next = [...prev];
+                            next[existingIndexByClient] = docData;
+                            return next;
+                        }
+
+                        // If we have an entry that matches either id or clientId (safety), replace it; otherwise insert.
+                        const dupIndex = prev.findIndex(m => m.id === docData.id || (docClientId && m.clientId === docClientId));
+                        if (dupIndex !== -1) {
+                            const next = [...prev];
+                            next[dupIndex] = docData;
+                            return next;
+                        }
+
                         const next = [...prev];
                         const insertIndex = Math.min(change.newIndex, next.length);
                         next.splice(insertIndex, 0, docData);
@@ -612,7 +849,9 @@ const ConversationScreen = () => {
                 } else if (change.type === 'modified') {
                     setLiveMessages((prev) => {
                         const i = prev.findIndex(m => m.id === docData.id || m.clientId === docClientId);
-                        if (i === -1) return prev;
+                        if (i === -1) {
+                            return prev;
+                        }
                         const next = [...prev];
                         next[i] = docData;
                         return next;
@@ -694,6 +933,7 @@ const ConversationScreen = () => {
                 lastMessage: text,
                 lastMessageSender: 'admin',
                 lastMessageTimestamp: Timestamp.now(),
+                lastActivity: Timestamp.now(),
                 userUnread: increment(1),
             });
 
@@ -1024,35 +1264,40 @@ const ConversationScreen = () => {
                         </Menu>
                     </View>
                 </View>
-                <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={90} enabled>
-                    {loading ? <ActivityIndicator style={{ flex: 1 }} size="large" color={themeColors.tint} /> :
-                        <FlatList 
-                            data={visualData} 
-                            renderItem={renderItem} 
-                            keyExtractor={(item) => item.message.id.toString()} 
-                            inverted 
-                            onEndReached={() => loadOlderMessages()}
-                            onEndReachedThreshold={0.2}
-                            ListFooterComponent={isLoadingMore ? <ActivityIndicator size="small" color={themeColors.tint} /> : null}
-                            contentContainerStyle={styles.listContent} 
-                        />
-                    }
-                    {isChatInitiallyClosed ? (
-                        <View style={[styles.inputContainer, { borderTopColor: themeColors.border, backgroundColor: themeColors.background }]}>
-                            <Text style={[styles.closedChatText, { color: themeColors.textMuted }]}>Czat został zamknięty</Text>
-                        </View>
-                    ) : chat?.userIsBanned ? (
-                        <View style={[styles.inputContainer, { borderTopColor: themeColors.border, backgroundColor: themeColors.background, padding: 12 }]}>
-                            <Text style={{ color: themeColors.danger, marginBottom: 6 }}>Użytkownik zbanowany{chat.bannedUntil ? ` do ${chat.bannedUntil.toDate().toLocaleString()}` : ''}</Text>
-                            <Text style={[styles.closedChatText, { color: themeColors.textMuted }]}>Wysyłanie wiadomości zostało zablokowane dla tego użytkownika.</Text>
-                        </View>
-                    ) : (
-                        <View style={[styles.inputContainer, { borderTopColor: themeColors.border, backgroundColor: themeColors.background }]}>
-                            <TextInput nativeID="chat-new-message" style={[styles.input, { color: themeColors.text, backgroundColor: '#f3f4f8' }]} value={newMessage} onChangeText={setNewMessage} placeholder="Napisz wiadomość..." placeholderTextColor={themeColors.textMuted} multiline autoComplete="off" />
-                            <TouchableOpacity onPress={handleSend} style={[styles.sendButton, { backgroundColor: themeColors.tint }]}><Ionicons name="send" size={20} color="white" /></TouchableOpacity>
-                        </View>
+                    {loading ? <ActivityIndicator style={{ flex: 1 }} size="large" color={themeColors.tint} /> : (
+                        <>
+                            <FlatList 
+                                ref={(r) => { listRef.current = r; }}
+                                data={visualData} 
+                                renderItem={renderItem} 
+                                keyExtractor={(item) => item.message.id.toString()} 
+                                inverted 
+                                onEndReached={() => loadOlderMessages()}
+                                onEndReachedThreshold={0.2}
+                                ListFooterComponent={isLoadingMore ? <ActivityIndicator size="small" color={themeColors.tint} /> : null}
+                                contentContainerStyle={styles.listContent}
+                                keyboardShouldPersistTaps="handled"
+                            />
+
+                            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={(insets?.bottom || 0) + 90} enabled>
+                                {isChatInitiallyClosed ? (
+                                    <View style={[styles.inputContainer, { borderTopColor: themeColors.border, backgroundColor: themeColors.background, paddingBottom: insets?.bottom || 0 }]}>
+                                        <Text style={[styles.closedChatText, { color: themeColors.textMuted }]}>Czat został zamknięty</Text>
+                                    </View>
+                                ) : chat?.userIsBanned ? (
+                                    <View style={[styles.inputContainer, { borderTopColor: themeColors.border, backgroundColor: themeColors.background, padding: 12, paddingBottom: insets?.bottom || 0 }]}>
+                                        <Text style={{ color: themeColors.danger, marginBottom: 6 }}>Użytkownik zbanowany{chat.bannedUntil ? ` do ${chat.bannedUntil.toDate().toLocaleString()}` : ''}</Text>
+                                        <Text style={[styles.closedChatText, { color: themeColors.textMuted }]}>Wysyłanie wiadomości zostało zablokowane dla tego użytkownika.</Text>
+                                    </View>
+                                ) : (
+                                    <View style={[styles.inputContainer, { borderTopColor: themeColors.border, backgroundColor: themeColors.background, paddingBottom: insets?.bottom || 0 }]}>
+                                        <TextInput nativeID="chat-new-message" style={[styles.input, { color: themeColors.text, backgroundColor: '#f3f4f8' }]} value={newMessage} onChangeText={setNewMessage} placeholder="Napisz wiadomość..." placeholderTextColor={themeColors.textMuted} multiline autoComplete="off" />
+                                        <TouchableOpacity onPress={handleSend} style={[styles.sendButton, { backgroundColor: themeColors.tint }]}><Ionicons name="send" size={20} color="white" /></TouchableOpacity>
+                                    </View>
+                                )}
+                            </KeyboardAvoidingView>
+                        </>
                     )}
-                </KeyboardAvoidingView>
                 </TabTransition>
             </SafeAreaView>
         </MenuProvider>
@@ -1076,6 +1321,10 @@ const styles = StyleSheet.create({
     headerActionButton: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginHorizontal: 5, justifyContent: 'center', alignItems: 'center' },
     headerActionButtonText: { color: 'white', fontSize: 13, fontWeight: '500' },
     listContent: { paddingVertical: 10, paddingHorizontal: 10, },
+    timeSeparatorContainer: { alignItems: 'center', marginVertical: 8 },
+    timeSeparatorFullRow: { width: '100%', alignItems: 'center', marginVertical: 8 },
+    timeSeparatorPill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14 },
+    timeSeparatorText: { fontSize: 12, color: '#777' },
     messageRow: { flexDirection: 'row', alignItems: 'flex-end', maxWidth: '95%' },
     myMessageRow: { alignSelf: 'flex-end' },
     theirMessageRow: { alignSelf: 'flex-start' },
@@ -1085,6 +1334,8 @@ const styles = StyleSheet.create({
     messageBubble: { paddingVertical: 10, paddingHorizontal: 15, },
     myMessageBubble: {},
     theirMessageBubble: { backgroundColor: '#f3f4f8', },
+    timestampContainer: { marginBottom: 6 },
+    timestampText: { fontSize: 12, color: '#777' },
     aiMessageBubble: { backgroundColor: '#e5e7eb', },
     soloBubble: { borderRadius: 20 },
     myBubble_first: { borderTopLeftRadius: 20, borderTopRightRadius: 20, borderBottomLeftRadius: 20, borderBottomRightRadius: 5 },

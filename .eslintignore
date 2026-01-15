@@ -1,0 +1,9 @@
+node_modules/
+.expo/
+.dist/
+build/
+coverage/
+.vscode/
+*.config.js
+**/*.test.js
+**/__tests__/

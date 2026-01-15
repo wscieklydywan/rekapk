@@ -1,8 +1,8 @@
 
+import { db } from '@/lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 import { useEffect } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
-import { doc, setDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
 import { useAuth } from './useAuth';
 
 /**
@@ -22,7 +22,6 @@ export const useAppState = () => {
       const status = (nextAppState === 'active') ? 'active' : 'background';
       try {
         await setDoc(userDocRef, { appState: status }, { merge: true });
-        console.log(`SUCCESS: App state '${status}' saved to users/${user.uid}`);
       } catch (error) {
         console.error("ERROR: Failed to save app state to Firestore:", error);
       }

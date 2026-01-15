@@ -1,12 +1,12 @@
 
 import { Colors } from '@/constants/theme';
 import { auth } from '@/lib/firebase';
+import { showMessage } from '@/lib/showMessage';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
-import { showMessage } from 'react-native-flash-message';
 
 const LoginScreen = () => {
   const [email, setEmail] = useState('');

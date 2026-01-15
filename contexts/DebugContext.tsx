@@ -1,5 +1,5 @@
 
-import React, { createContext, useState, useContext, ReactNode } from 'react';
+import React, { createContext, ReactNode, useContext, useState } from 'react';
 
 // Define the shape of the context data
 interface DebugContextType {
@@ -18,7 +18,9 @@ export const DebugProvider = ({ children }: { children: ReactNode }) => {
     // Create a message with a timestamp
     const timedMessage = `${new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}: ${message}`;
     // Log to console for developers viewing logs in the terminal
-    console.log(`[DIAGNOSTIC LOG] ${message}`);
+    if ((global as any).__DEV__) {
+      console.debug(`[DIAGNOSTIC LOG] ${message}`);
+    }
     // Update state, keeping only the last 20 messages to prevent memory leaks
     setMessages(prev => [...prev.slice(-20), timedMessage]);
   };

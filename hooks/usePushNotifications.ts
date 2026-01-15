@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
-import { Platform } from 'react-native';
-import Constants from 'expo-constants';
-import * as Notifications from 'expo-notifications';
-import * as Device from 'expo-device';
-import { doc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import Constants from 'expo-constants';
+import * as Device from 'expo-device';
+import * as Notifications from 'expo-notifications';
+import { doc, setDoc } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 import { useAuth } from './useAuth';
 
 /**
@@ -12,7 +12,7 @@ import { useAuth } from './useAuth';
  */
 async function registerForPushNotificationsAsync(): Promise<string | null> {
   if (!Device.isDevice) {
-    console.log("Push notifications are only available on physical devices.");
+    console.warn("Push notifications are only available on physical devices.");
     return null;
   }
 
@@ -25,7 +25,7 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
   }
 
   if (finalStatus !== 'granted') {
-    console.log("Failed to get push token for push notification!");
+    console.warn("Failed to get push token for push notification!");
     return null;
   }
 

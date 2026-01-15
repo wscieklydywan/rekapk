@@ -2,13 +2,14 @@
 import { useFormContext } from '@/app/contexts/FormProvider';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import TabTransition from '@/components/TabTransition';
+import { ANIM_FADE_DURATION, ANIM_TRANSLATE_DURATION } from '@/constants/animations';
 import { Colors } from '@/constants/theme';
+import { showMessage } from '@/lib/showMessage';
 import { ContactForm } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
-import { showMessage } from 'react-native-flash-message';
 import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 import { db } from '@/lib/firebase';
@@ -77,14 +78,14 @@ const FormListItem = ({ item, themeColors, selectionMode, isSelected, onSelect, 
     
     const animatedContentStyle = useAnimatedStyle(() => {
         return {
-            marginLeft: withTiming(selectionMode ? 40 : 0, { duration: 250, easing: Easing.inOut(Easing.ease) }),
+            marginLeft: withTiming(selectionMode ? 40 : 0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) }),
         };
     });
 
     return (
         <TouchableOpacity onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, isSelected && { backgroundColor: themeColors.selection }]}>
              {selectionMode && (
-                <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={styles.checkboxContainer}>
+                <Animated.View entering={FadeIn.duration(ANIM_FADE_DURATION)} exiting={FadeOut.duration(ANIM_FADE_DURATION)} style={styles.checkboxContainer}>
                     <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={isSelected ? themeColors.tint : themeColors.textMuted}/>
                 </Animated.View>
             )}
@@ -259,7 +260,7 @@ const FormsListScreen = () => {
     };
 
     const headerOpacityAnim = useSharedValue(selectionMode ? 1 : 0);
-    useEffect(() => { headerOpacityAnim.value = withTiming(selectionMode ? 1 : 0, { duration: 250 }); }, [selectionMode]);
+    useEffect(() => { headerOpacityAnim.value = withTiming(selectionMode ? 1 : 0, { duration: ANIM_FADE_DURATION }); }, [selectionMode]);
     const defaultHeaderStyle = useAnimatedStyle(() => ({ opacity: 1 - headerOpacityAnim.value }));
     const selectionHeaderStyle = useAnimatedStyle(() => ({ opacity: headerOpacityAnim.value }));
 
