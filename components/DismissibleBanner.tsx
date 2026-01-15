@@ -149,16 +149,19 @@ const DismissibleBanner = ({
     return { iconWrapSize: wrap, iconInnerSize: inner, normalizedIcon: norm };
   }, [screenWidth, icon, resolvedTitleColor]);
 
+  // Slightly increase banner width by 1px over 92% to match visual request
+  const bannerWidth = React.useMemo(() => Math.round(screenWidth * 0.92) + 1, [screenWidth]);
+
   return (
     <PanGestureHandler onGestureEvent={onGestureEvent as any} onHandlerStateChange={onHandlerStateChange as any}>
       <Animated.View
         style={[
           styles.container,
           // make banner slightly higher (closer to top) and allow for safe-area
-          { top: Math.max(8, insets.top + 4) },
+          { top: Math.max(5, insets.top + 1) },
           // combine base entrance offset with live gesture offset; keep X translation for horizontal swipes
           { transform: [{ translateY: Animated.add(baseY, gestureY) }, { translateX }] },
-        ]}
+        ]} 
         pointerEvents="box-none"
       >
         <TouchableWithoutFeedback
@@ -180,7 +183,7 @@ const DismissibleBanner = ({
               styles.banner,
               isFlash
                 ? { borderRadius: 0, width: '100%', shadowOpacity: 0, elevation: 0, paddingTop: Math.max(18, insets.top + 8) }
-                : { paddingVertical: 18, paddingHorizontal: 20, width: '92%' },
+                : { paddingVertical: 18, paddingHorizontal: 20, width: bannerWidth },
               { backgroundColor: resolvedBackground },
               style,
             ]}
