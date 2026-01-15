@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet, Text, TouchableWithoutFeedback, View } from 'react-native';
+import { Animated, Dimensions, Easing, StyleSheet, Text, TouchableWithoutFeedback, View } from 'react-native';
 import { PanGestureHandler } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -88,13 +88,11 @@ const DismissibleBanner = ({
     });
   };
 
-  // use any typing here to avoid strict gesture types mismatch with various RN versions
-  const onGestureEvent = (event: any) => {
-    const tX = event.nativeEvent.translationX ?? 0;
-    const tY = event.nativeEvent.translationY ?? 0;
-    translateX.setValue(tX);
-    gestureY.setValue(tY);
-  };
+  // Drive gesture values on the native thread to avoid hammering the JS thread
+  const onGestureEvent = Animated.event(
+    [{ nativeEvent: { translationX: translateX, translationY: gestureY } }],
+    { useNativeDriver: true }
+  );
 
   const onHandlerStateChange = (event: any) => {
     const tX = event.nativeEvent.translationX ?? 0;
@@ -118,23 +116,46 @@ const DismissibleBanner = ({
     ? (backgroundColor ?? 'rgba(255,255,255,0.45)')
     : (backgroundColor ?? 'rgba(255,255,255,0.45)');
 
+
+
+
   // Debug: log resolved background once on mount so we can verify on web/native
   React.useEffect(() => {
-    // Use warn so it stands out in logs during development
-    // eslint-disable-next-line no-console
-    console.warn('DismissibleBanner resolvedBackground ->', resolvedBackground);
-  }, [resolvedBackground]);
+    // Only log in development and do it quietly to avoid spamming the console
+    if ((global as any).__DEV__) {
+      // eslint-disable-next-line no-console
+      console.debug && console.debug('DismissibleBanner resolvedBackground ->', resolvedBackground);
+    }
+    // Intentionally run only once on mount to avoid repeated logs
+  }, []);
 
   const resolvedTitleColor = color ?? (isFlash ? '#fff' : '#111');
   const resolvedDescColor = color ?? (isFlash ? '#fff' : undefined);
 
+  // Responsive icon sizing: adapt the icon container and glyph to screen width
+  const { width: screenWidth } = Dimensions.get('window');
+  const { iconWrapSize, iconInnerSize, normalizedIcon } = React.useMemo(() => {
+    const wrap = screenWidth < 360 ? 36 : screenWidth < 420 ? 44 : 52;
+    const inner = Math.max(16, Math.round(wrap * 0.7));
+    let norm: React.ReactNode = icon;
+    if (icon && React.isValidElement(icon)) {
+      const propsToAdd: any = { size: inner };
+      if ((icon as any).props && typeof (icon as any).props.color === 'undefined') propsToAdd.color = resolvedTitleColor;
+      // Ensure image/vector icons receive explicit sizing via style prop
+      const existingStyle = (icon as any).props ? (icon as any).props.style : undefined;
+      propsToAdd.style = [existingStyle, { width: inner, height: inner }];
+      norm = React.cloneElement(icon as React.ReactElement, propsToAdd);
+    }
+    return { iconWrapSize: wrap, iconInnerSize: inner, normalizedIcon: norm };
+  }, [screenWidth, icon, resolvedTitleColor]);
+
   return (
-    <PanGestureHandler onGestureEvent={onGestureEvent as any} onEnded={onHandlerStateChange as any} onHandlerStateChange={onHandlerStateChange as any}>
+    <PanGestureHandler onGestureEvent={onGestureEvent as any} onHandlerStateChange={onHandlerStateChange as any}>
       <Animated.View
         style={[
           styles.container,
-          // push the banner a bit lower so it doesn't overlap the front camera
-          { top: Math.max(18, insets.top + 8) },
+          // make banner slightly higher (closer to top) and allow for safe-area
+          { top: Math.max(8, insets.top + 4) },
           // combine base entrance offset with live gesture offset; keep X translation for horizontal swipes
           { transform: [{ translateY: Animated.add(baseY, gestureY) }, { translateX }] },
         ]}
@@ -159,13 +180,17 @@ const DismissibleBanner = ({
               styles.banner,
               isFlash
                 ? { borderRadius: 0, width: '100%', shadowOpacity: 0, elevation: 0, paddingTop: Math.max(18, insets.top + 8) }
-                : { paddingVertical: 20, paddingHorizontal: 24 },
+                : { paddingVertical: 18, paddingHorizontal: 20, width: '92%' },
               { backgroundColor: resolvedBackground },
               style,
             ]}
           >
             <View style={styles.row}>
-              {icon ? <View style={[styles.iconWrap, { backgroundColor: 'rgba(0,0,0,0.06)' }]}>{icon}</View> : null}
+              {icon ? (
+                <View style={[styles.iconWrap, { width: iconWrapSize, height: iconWrapSize, borderRadius: iconWrapSize / 2, backgroundColor: 'rgba(0,0,0,0.06)' }]}>
+                  <View style={{ width: iconInnerSize, height: iconInnerSize, alignItems: 'center', justifyContent: 'center' }}>{normalizedIcon}</View>
+                </View>
+              ) : null}
 
               <View style={styles.textWrap}>
                 <Text style={[styles.title, { color: resolvedTitleColor }, (titleStyle as any) || {}]} numberOfLines={1}>
@@ -194,6 +219,8 @@ const styles = StyleSheet.create({
     zIndex: 1000,
     alignItems: 'center',
     pointerEvents: 'box-none',
+    // ensure banner centers with a bit more horizontal space on smaller screens
+    paddingHorizontal: 8,
   },
   banner: {
     minWidth: '80%',
@@ -201,21 +228,18 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     paddingHorizontal: 18,
     shadowColor: '#000',
-    shadowOpacity: 0.16,
-    shadowOffset: { width: 0, height: 10 },
-    shadowRadius: 20,
-    elevation: 12,
+    // lower shadow intensity to reduce compositing cost
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 6,
+    elevation: 4,
     alignSelf: 'center',
-    overflow: 'hidden',
+    overflow: 'visible',
   },
   row: { flexDirection: 'row', alignItems: 'center' },
   iconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#eef4ff',
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
     marginRight: 16,
     marginLeft: 12,
   },
