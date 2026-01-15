@@ -182,8 +182,8 @@ const DismissibleBanner = ({
             style={[
               styles.banner,
               isFlash
-                ? { borderRadius: 0, width: '100%', shadowOpacity: 0, elevation: 0, paddingTop: Math.max(45, insets.top + 35), paddingBottom: 45 }
-                : { paddingVertical: 45, paddingHorizontal: 20, width: bannerWidth },
+                ? { borderRadius: 0, width: '100%', shadowOpacity: 0, elevation: 0, paddingTop: Math.max(62, insets.top + 52), paddingBottom: 62 }
+                : { paddingVertical: 62, paddingHorizontal: 20, width: bannerWidth },
               { backgroundColor: resolvedBackground },
               style,
             ]}
@@ -228,7 +228,7 @@ const styles = StyleSheet.create({
   banner: {
     minWidth: '80%',
     borderRadius: 14,
-    paddingVertical: 45,
+    paddingVertical: 62,
     paddingHorizontal: 18,
     shadowColor: '#000',
     // lower shadow intensity to reduce compositing cost
