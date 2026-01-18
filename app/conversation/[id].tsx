@@ -7,10 +7,10 @@ import { db } from '@/lib/firebase';
 import { Chat, Message, User } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { collection, doc, getDoc, getDocs, increment, limit, onSnapshot, orderBy, query, startAfter, Timestamp, updateDoc, writeBatch } from 'firebase/firestore';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, AppState, FlatList, KeyboardAvoidingView, LayoutAnimation, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, AppState, BackHandler, FlatList, KeyboardAvoidingView, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AnimatedModal from '@/components/AnimatedModal';
@@ -23,6 +23,36 @@ const GROUP_THRESHOLD_MINUTES = 3;
 const MESSAGES_LIMIT = 50; // number of messages to keep in live subscription
 // Dev-only: enable verbose message subscription logging when running in dev
 const DEV_MSG_LOGGING = (global as any).__DEV__ || process.env.NODE_ENV === 'development';
+
+// In-memory cache to provide instant "messenger feel" across navigations
+const inMemoryMessageCache: Map<string, { messages: any[]; lastVisible?: number; lastVisibleDocId?: string; lastVisibleDoc?: any; updatedAt?: number }> = new Map();
+
+// Max number of chat caches to keep in memory (LRU eviction)
+const MAX_IN_MEMORY_CHATS = 8;
+
+const setInMemoryCache = (chatId: string, payload: { messages: any[]; lastVisible?: number; lastVisibleDocId?: string; lastVisibleDoc?: any; updatedAt?: number }) => {
+    try {
+        // move to recent by deleting first if exists
+        if (inMemoryMessageCache.has(chatId)) inMemoryMessageCache.delete(chatId);
+        inMemoryMessageCache.set(chatId, payload);
+        // evict oldest entries if over limit (Map preserves insertion order)
+        while (inMemoryMessageCache.size > MAX_IN_MEMORY_CHATS) {
+            const oldestKey = inMemoryMessageCache.keys().next().value;
+            if (!oldestKey) break;
+            inMemoryMessageCache.delete(oldestKey);
+        }
+    } catch (e) {
+        /* ignore */
+    }
+};
+
+const getInMemoryCache = (chatId: string) => {
+    const entry = inMemoryMessageCache.get(chatId) || null;
+    if (!entry) return null;
+    // mark as recently used
+    try { inMemoryMessageCache.delete(chatId); inMemoryMessageCache.set(chatId, entry); } catch(e) {}
+    return entry;
+};
 
 const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins, showAdminTag, onRetry, index, activeMessageId, activeMessageIndex, onToggleActive, showTimeSeparator, separatorLabel, listInverted }: { message: Message; prevMessage?: Message; nextMessage?: Message; themeColors: any; admins: { [key: string]: User }, showAdminTag?: boolean, onRetry?: (m: Message) => void, index: number, activeMessageId: string | null, activeMessageIndex: number | null, onToggleActive: (id: string | null, idx?: number) => void, showTimeSeparator?: boolean, separatorLabel?: string | null, listInverted?: boolean }) => {
     const isMyMessage = message.sender === 'admin';
@@ -69,39 +99,51 @@ const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins,
     ];
 
     const tooltipTimerRef = useRef<number | null>(null);
-    const timestampOpacity = useRef(new Animated.Value(0)).current;
 
-    const formattedTime = message.createdAt?.toDate ? new Date(message.createdAt.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    const formattedTime = React.useMemo(() => {
+        if (!message.createdAt?.toDate) return '';
+        const d = new Date(message.createdAt.toDate());
+        const now = new Date();
+        const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+        const daysDiff = Math.round((startOfDay(now).getTime() - startOfDay(d).getTime()) / (1000 * 60 * 60 * 24));
+        const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        // Today => show time only
+        if (daysDiff === 0) return time;
+
+        // Within last 7 days => show short weekday (e.g., "czw.") + time
+        if (daysDiff > 0 && daysDiff < 7) {
+            const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(d);
+            return `${weekday} o ${time}`;
+        }
+
+        // Older this year => show day + short month (e.g., "11 sty.") + time
+        const monthShort = new Intl.DateTimeFormat(undefined, { month: 'short' }).format(d);
+        const day = d.getDate();
+        if (d.getFullYear() === now.getFullYear()) {
+            return `${day} ${monthShort} o ${time}`;
+        }
+
+        // Older than this year => include year
+        return `${day} ${monthShort} ${d.getFullYear()} o ${time}`;
+    }, [message.createdAt]);
 
     const isActive = activeMessageId === message.id;
 
-    // Show/hide timestamp with proper fade-in and fade-out (keep element in tree during fade-out)
+    // Show/hide timestamp instantly (no animation) to avoid flaky toggle behavior
     const [showTimestampLocal, setShowTimestampLocal] = useState(false);
     useEffect(() => {
-        let anim: Animated.CompositeAnimation | null = null;
         if (isActive) {
-            // keep timestamp in tree while animating in
             setShowTimestampLocal(true);
-
             if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current);
             tooltipTimerRef.current = window.setTimeout(() => {
-                try { onToggleActive(null); } catch(e) { /* ignore */ }
+                try { onToggleActive(null); } catch (e) { /* ignore */ }
             }, 3000);
-
-            // fade in timestamp (also visible on web)
-            anim = Animated.timing(timestampOpacity, { toValue: 1, duration: 180, useNativeDriver: true });
-            anim.start();
         } else {
             if (tooltipTimerRef.current) { clearTimeout(tooltipTimerRef.current); tooltipTimerRef.current = null; }
-
-            // fade out timestamp, then remove from tree
-            anim = Animated.timing(timestampOpacity, { toValue: 0, duration: 140, useNativeDriver: true });
-            anim.start(({ finished }) => {
-                if (finished) setShowTimestampLocal(false);
-            });
+            setShowTimestampLocal(false);
         }
-
-        return () => { if (anim && (anim as any).stop) try { (anim as any).stop(); } catch(e) {} };
+        return () => { if (tooltipTimerRef.current) { clearTimeout(tooltipTimerRef.current); tooltipTimerRef.current = null; } };
     }, [isActive]);
 
 
@@ -124,6 +166,9 @@ const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins,
         else if (isLastInGroup) bubbleStyles.push(styles.theirBubble_last);
         else bubbleStyles.push(styles.theirBubble_middle);
     }
+
+    // Ensure touch feedback is clipped to the bubble shape (rounded corners)
+    bubbleStyles.push({ overflow: 'hidden', position: 'relative' });
 
     return (
         <>
@@ -160,26 +205,28 @@ const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins,
                         </Text>
                     )}
 
-                    <View>
-                        <Animated.View style={[styles.timestampContainer, { opacity: timestampOpacity, transform: [{ translateY: timestampOpacity.interpolate ? timestampOpacity.interpolate({ inputRange: [0, 1], outputRange: [6, 0] }) : 0 }] }]}>
-                            {showTimestampLocal && (
-                                <Text style={[styles.timestampText, isMyMessage ? { textAlign: 'right', color: '#999' } : { color: themeColors.textMuted }]}>{formattedTime}</Text>
-                            )}
-                        </Animated.View>
-
-                        <Pressable onPress={() => onToggleActive(message.id, index)} style={bubbleStyles} android_ripple={{ color: 'rgba(0,0,0,0.06)' }}>
-                            <Text style={isMyMessage ? styles.myMessageText : [styles.theirMessageText, { color: themeColors.text }]}>
-                                {message.text}
+                    <View style={styles.messageOuter}>
+                        {showTimestampLocal && (
+                            <Text style={[styles.timestampText, isMyMessage ? { textAlign: 'right', color: '#999', marginBottom: 4 } : { color: themeColors.textMuted, marginBottom: 4 }]}>
+                                {formattedTime}
                             </Text>
-                            {message.pending && (
-                                <ActivityIndicator size="small" color={themeColors.tint} style={{ marginLeft: 8, marginTop: 6 }} />
-                            )}
-                            {message.failed && onRetry && (
-                                <TouchableOpacity onPress={() => onRetry(message)} style={{ marginTop: 6 }}>
-                                    <Text style={{ color: themeColors.tint, fontSize: 13 }}>Retry</Text>
-                                </TouchableOpacity>
-                            )}
-                        </Pressable>
+                        )}
+
+                        <View style={[styles.bubbleWrapper, isMyMessage ? { alignSelf: 'flex-end' } : { alignSelf: 'flex-start' }]}>
+                            <Pressable onPress={() => onToggleActive(message.id, index)} style={bubbleStyles}>
+                                <Text style={isMyMessage ? styles.myMessageText : [styles.theirMessageText, { color: themeColors.text }]}>
+                                    {message.text}
+                                </Text>
+                                {message.pending && (
+                                    <ActivityIndicator size="small" color={themeColors.tint} style={{ marginLeft: 8, marginTop: 6 }} />
+                                )}
+                                {message.failed && onRetry && (
+                                    <TouchableOpacity onPress={() => onRetry(message)} style={{ marginTop: 6 }}>
+                                        <Text style={{ color: themeColors.tint, fontSize: 13 }}>Retry</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </Pressable>
+                        </View>
                     </View>
                 </View>
             </View>
@@ -239,6 +286,7 @@ const MemoMessageBubble = React.memo(MessageBubble, (prevProps, nextProps) => {
 const ConversationScreen = () => {
     const { user } = useAuth();
     const router = useRouter();
+    const navigation = useNavigation();
     const { id: chatId, status: initialStatus, contactName: encodedContactName } = useLocalSearchParams<{ id: string; status?: Chat['status'], contactName?: string }>();
     const theme = useColorScheme() ?? 'light';
     const themeColors = Colors[theme];
@@ -255,6 +303,7 @@ const ConversationScreen = () => {
     const lastVisibleDocIdRef = useRef<string | null>(null);
     const lastVisibleTimestampRef = useRef<number | null>(null);
     const firstSnapshotRef = useRef(true);
+    const firstSnapshotAppliedRef = useRef(false);
 
     const combinedMessages = useMemo(() => {
         // Deduplicate messages by id to avoid duplicate keys in lists (e.g., same message present in live and older arrays)
@@ -273,7 +322,95 @@ const ConversationScreen = () => {
         }
         return combined;
     }, [liveMessages, olderMessages]);
-    const [loading, setLoading] = useState(true);
+    // Per new mount rule: render-only on first frame — loading must be false immediately
+    const [loading, setLoading] = useState(false);
+
+
+    // Presence cooldown guard (ms) and last-sent timestamp
+    const PRESENCE_COOLDOWN_MS = 1000;
+    const presenceLastSentAtRef = useRef<number | null>(null);
+
+    // Presence helpers (synchronous-feel): optimistic local update + immediate server fire-and-forget
+    const goOnlineImmediate = async (chatIdParam: string, adminIdParam: string) => {
+        try {
+            const chatDocRef = doc(db, 'chats', chatIdParam);
+            const docSnap = await getDoc(chatDocRef);
+            if (!docSnap.exists()) {
+                console.warn('Chat does not exist (goOnlineImmediate)');
+                router.back();
+                return;
+            }
+            const chatData = docSnap.data() as Chat;
+            if (chatData.activeAdminId !== adminIdParam) {
+                // fire-and-forget update
+                try { await updateDoc(chatDocRef, { activeAdminId: adminIdParam }); } catch(e) { console.error('goOnlineImmediate updateDoc failed', e); }
+            }
+            if (chatData.adminUnread > 0) {
+                try { await updateDoc(chatDocRef, { adminUnread: 0, lastPushAt: null }); } catch(e) { console.error('goOnlineImmediate clear unread failed', e); }
+            }
+        } catch (error) {
+            console.error('Error in goOnlineImmediate:', error);
+        }
+    };
+
+    const goOfflineImmediate = async (chatIdParam: string, adminIdParam: string) => {
+        try {
+            // Optimistic local update for instant UI feedback
+            setChat(prev => prev && prev.id === chatIdParam && prev.activeAdminId === adminIdParam ? { ...prev, activeAdminId: null, lastActivity: Timestamp.now() } : prev);
+
+            // cooldown guard to avoid spamming writes
+            const now = Date.now();
+            if (presenceLastSentAtRef.current && now - presenceLastSentAtRef.current < PRESENCE_COOLDOWN_MS) return;
+            presenceLastSentAtRef.current = now;
+
+            const chatDocRef = doc(db, 'chats', chatIdParam);
+            const docSnap = await getDoc(chatDocRef);
+            if (docSnap.exists() && docSnap.data().activeAdminId === adminIdParam) {
+                try { await updateDoc(chatDocRef, { activeAdminId: null, lastActivity: Timestamp.now() }); } catch(e) { console.error('goOfflineImmediate updateDoc failed', e); }
+            }
+        } catch (error) {
+            console.error('Error in goOfflineImmediate:', error);
+        }
+    };
+
+    // Presence effect: run immediately on mount/enter (server-only, fire-and-forget)
+    // NOTE: we intentionally do NOT mutate local chat state optimistically — presence is a server-side semantic command.
+    useEffect(() => {
+        if (!chatId || !user) return;
+        const adminId = user.uid;
+
+        // initiate server-side presence immediately (fire-and-forget)
+        (async () => { await goOnlineImmediate(chatId, adminId); })();
+
+        // On unmount: immediately notify server we're offline (fire-and-forget). Do NOT rely on rAF or local state.
+        return () => {
+            (async () => { await goOfflineImmediate(chatId, adminId); })();
+        };
+    }, [chatId, user]);
+
+    // If navigation away begins (back swipe/hardware button), immediately notify server we're offline so presence updates before animation completes
+    useEffect(() => {
+        if (!navigation || !chatId || !user) return;
+        const handler = () => {
+            // fire-and-forget: we don't block navigation
+            (async () => { await goOfflineImmediate(chatId, user.uid); })();
+        };
+        const unsub = navigation.addListener('beforeRemove', handler);
+        return () => { try { unsub(); } catch (e) {} };
+    }, [navigation, chatId, user]);
+
+    // Android hardware back: ensure presence is notified immediately before default back behavior
+    useEffect(() => {
+        if (Platform.OS !== 'android' || !chatId || !user) return;
+        const onHardwareBack = () => {
+            (async () => { await goOfflineImmediate(chatId, user.uid); })();
+            // return false so default back behavior proceeds
+            return false;
+        };
+        BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+        return () => { BackHandler.removeEventListener('hardwareBackPress', onHardwareBack); };
+    }, [chatId, user]);
+
     const [modalConfig, setModalConfig] = useState<{ title: string; message: string; confirmText: string; onConfirm: () => void; cancelText?: string; variant?: 'destructive' | 'secondary'; } | null>(null);
 
     // Prevent other modals from appearing immediately after this one closes (fixes a brief "OK" flash)
@@ -287,43 +424,226 @@ const ConversationScreen = () => {
 
     const handleToggleActive = (id: string | null, idx?: number) => {
         if (!id) {
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
             setActiveMessageId(null);
             setActiveMessageIndex(null);
             return;
         }
         if (activeMessageId === id) {
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
             setActiveMessageId(null);
             setActiveMessageIndex(null);
         } else {
-            // attempt to scroll the tapped item into view (place it lower on screen) then mark active
-            if (typeof idx === 'number' && listRef.current) {
-                try {
-                    // Scroll so that the tapped item itself is positioned lower (viewPosition 0.85)
-                    listRef.current.scrollToIndex({ index: idx, viewPosition: 0.85, animated: true });
-                } catch (e) {
-                    try {
-                        // If index not found / not rendered yet, nudge by scrolling a few items older as fallback
-                        const fallback = Math.min(Math.max(0, idx + 3), (visualData?.length || 0) - 1);
-                        listRef.current.scrollToIndex({ index: fallback, viewPosition: 0.9, animated: true });
-                    } catch (e2) {
-                        try { listRef.current.scrollToOffset({ offset: 0, animated: true }); } catch(e3) { /* ignore */ }
+            // Do NOT perform any autoscroll here — just mark active message.
+            setActiveMessageId(id);
+            setActiveMessageIndex(typeof idx === 'number' ? idx : null);
+        }
+    };
+
+
+
+    // When deferredReady becomes true, perform all writes, initial fetches and subscriptions.
+    useEffect(() => {
+        if (!chatId || !user) return;
+
+        let unsubChat: (() => void) | null = null;
+        let unsubMessages: (() => void) | null = null;
+        let appStateSubscription: any = null;
+        let cancelled = false;
+
+        const chatDocRef = doc(db, 'chats', chatId);
+        const adminId = user.uid;
+
+        // initial heavy load (writes that change chat status, messages waiting->active etc.)
+        const handleInitialLoad = async () => {
+            try {
+                const docSnap = await getDoc(chatDocRef);
+                if (!docSnap.exists()) {
+                    if (!cancelled) {
+                        if (user) { (async () => { await goOfflineImmediate(chatId, user.uid); })(); }
+                        router.back();
+                    }
+                    return;
+                }
+                const chatData = { id: docSnap.id, ...docSnap.data() } as Chat;
+                if (chatData.status === 'waiting') {
+                    const systemMessageText = "Konsultant dołączył do rozmowy!";
+                    const updates = {
+                        status: "active",
+                        operatorId: adminId,
+                        assignedAdminId: adminId,
+                        operatorJoinedAt: Timestamp.now(),
+                        lastMessage: systemMessageText,
+                        lastMessageSender: 'system',
+                        lastMessageTimestamp: Timestamp.now(),
+                        lastActivity: Timestamp.now(),
+                    };
+                    const batch = writeBatch(db);
+                    batch.update(chatDocRef, updates);
+                    const messagesCol = collection(db, 'chats', chatId, 'messages');
+                    batch.delete(doc(messagesCol, 'waiting_message'));
+                    batch.set(doc(collection(db, 'chats', chatId, 'messages')), { text: systemMessageText, sender: "system", createdAt: Timestamp.now() });
+                    await batch.commit();
+                }
+            } catch (error) {
+                console.error("Błąd podczas ładowania czatu:", error);
+                if (!cancelled) {
+                    if (user) { (async () => { await goOfflineImmediate(chatId, user.uid); })(); }
+                    router.back();
+                }
+            }
+        };
+
+        handleInitialLoad();
+
+        handleInitialLoad();
+
+        // subscribe to chat doc
+        unsubChat = onSnapshot(chatDocRef, (docSnap) => {
+            if (cancelled) return;
+            if (docSnap.exists()) {
+                setChat({ id: docSnap.id, ...docSnap.data() } as Chat);
+            } else {
+                if (!cancelled) {
+                    if (user) { (async () => { await goOfflineImmediate(chatId, user.uid); })(); }
+                    router.back();
+                }
+            }
+        });
+
+        // subscribe to messages
+        const messagesQuery = query(collection(db, 'chats', chatId, 'messages'), orderBy('createdAt', 'desc'), limit(MESSAGES_LIMIT));
+        unsubMessages = onSnapshot(messagesQuery, (snapshot) => {
+
+            if (firstSnapshotRef.current && !firstSnapshotAppliedRef.current) {
+                // initial load -> populate live messages (merge-safe with cache)
+                firstSnapshotAppliedRef.current = true;
+                const docs = snapshot.docs;
+                const msgs = docs
+                    .map(doc => ({ ...doc.data(), id: doc.id } as Message))
+                    .filter(m => {
+                        const hasText = !!(m.text && String(m.text).trim().length > 0);
+                        if (!hasText) {
+                            try { console.warn('[chat] Skipping empty initial message', { chatId, id: m.id, sender: m.sender, raw: m }); } catch (e) {}
+                        }
+                        return hasText;
+                    }); // ignore empty messages
+
+                setLiveMessages((prev) => {
+                    // If we have cached messages already loaded, merge and prefer server for duplicates
+                    if (cacheLoadedRef.current && prev && prev.length > 0) {
+                        const map = new Map<string, Message>();
+                        for (const m of [...msgs, ...prev]) {
+                            if (!m || !m.id) continue;
+                            if (!map.has(m.id)) map.set(m.id, m);
+                        }
+                        const merged = Array.from(map.values()).sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+                        return merged;
+                    }
+                    // If server returned nothing but we had cached data, keep cached
+                    if (msgs.length === 0 && prev && prev.length > 0) return prev;
+                    // else use server-provided initial snapshot
+                    return msgs;
+                });
+
+                if (docs.length) lastVisibleTimestampRef.current = docs.length ? (docs[docs.length - 1].data() as any).createdAt?.toMillis?.() : null;
+                firstSnapshotRef.current = false;
+                // loading is intentionally false on first frame; don't block render
+                setLoading(false);
+                return;
+            }
+
+            // Batch-process docChanges and merge into current state to avoid replacing full history
+            const changes = snapshot.docChanges();
+            if (!changes || changes.length === 0) return;
+
+            let overflowToOlder: Message[] = [];
+
+            setLiveMessages((prev) => {
+                let next = [...prev];
+
+                for (const change of changes) {
+                    const docData = { ...change.doc.data(), id: change.doc.id } as Message & any;
+                    const docClientId = (change.doc.data() as Partial<Message>)?.clientId;
+
+                    if (change.type === 'added') {
+                        // ignore empty messages
+                        if (!docData.text || String(docData.text).trim().length === 0) {
+                            try { console.warn('[chat] Skipping empty added message', { chatId, id: docData.id || change.doc.id, sender: docData.sender, raw: docData }); } catch (e) {}
+                            continue;
+                        }
+
+                        // Replace local pending by clientId if present
+                        if (docClientId) {
+                            const idx = next.findIndex(m => m.clientId === docClientId);
+                            if (idx !== -1) {
+                                next[idx] = docData;
+                                continue;
+                            }
+                        }
+
+                        // Replace if we already have server id
+                        const existingIndexById = next.findIndex(m => m.id === docData.id);
+                        if (existingIndexById !== -1) {
+                            next[existingIndexById] = docData;
+                            continue;
+                        }
+
+                        // Replace by clientId if present
+                        const existingIndexByClient = docClientId ? next.findIndex(m => m.clientId === docClientId) : -1;
+                        if (existingIndexByClient !== -1) {
+                            next[existingIndexByClient] = docData;
+                            continue;
+                        }
+
+                        // Insert at reported index (safety-bounded)
+                        const insertIndex = Math.min((change as any).newIndex ?? next.length, next.length);
+                        next.splice(insertIndex, 0, docData);
+
+                    } else if (change.type === 'modified') {
+                        const i = next.findIndex(m => m.id === docData.id || m.clientId === docClientId);
+                        if (i === -1) continue;
+                        next[i] = docData;
+
+                    } else if (change.type === 'removed') {
+                        next = next.filter(m => m.id !== docData.id && m.clientId !== docClientId);
                     }
                 }
 
-                // Slight delay to let scroll finish before activating the timestamp (avoids visual jumps)
-                setTimeout(() => {
-                    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                    setActiveMessageId(id); setActiveMessageIndex(typeof idx === 'number' ? idx : null);
-                }, 180);
-            } else {
-                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                setActiveMessageId(id);
-                setActiveMessageIndex(typeof idx === 'number' ? idx : null);
+                // If we exceed MESSAGES_LIMIT, move overflow to olderMessages buffer
+                while (next.length > MESSAGES_LIMIT) {
+                    const overflow = next.pop()!;
+                    overflowToOlder.push(overflow);
+                }
+
+                return next;
+            });
+
+            if (overflowToOlder.length) {
+                setOlderMessages((old) => [...old, ...overflowToOlder]);
             }
-        }
-    };
+        });
+        
+        const handleAppStateChange = (nextAppState: string) => {
+            if (nextAppState !== 'active') {
+                // immediate server call (no rAF) to mark offline
+                try {
+                    const adminId = user?.uid;
+                    if (adminId && chatId) {
+                        (async () => { await goOfflineImmediate(chatId, adminId); })();
+                    }
+                } catch (e) { console.error(e); }
+            }
+        };
+
+        appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
+
+        return () => {
+            try { unsubChat && unsubChat(); } catch(e) { /* ignore */ }
+            try { unsubMessages && unsubMessages(); } catch(e) { /* ignore */ }
+            try { appStateSubscription?.remove?.(); } catch(e) { /* ignore */ }
+            // presence is handled separately (optimistic local + immediate server calls in presence effect)
+        };
+
+    }, [chatId, user, router]);
 
     const closeModal = () => {
         // On web, perform a double-blur and focus on body so Chrome doesn't restore focus outline
@@ -400,19 +720,7 @@ const ConversationScreen = () => {
         } else {
             setModalConfig(config as any);
         }
-    }; 
-
-    // Convert any quick "OK" modals into toasts to avoid flash-closing the modal
-    useEffect(() => {
-        if (modalConfig?.confirmText === 'OK') {
-            // show as toast and immediately clear the modal (with lock)
-            showMessage({ message: modalConfig.title, description: modalConfig.message, type: 'info', floating: true });
-            closeModal();
-        }
-    }, [modalConfig]);
-
-    const [showBackButtonBadge, setShowBackButtonBadge] = useState(false);
-    const { totalUnreadCount, admins: adminsMap, setChats } = useChatContext();
+    };
 
     // Caching keys & refs for AsyncStorage-based recent messages cache
     const CACHE_KEY = `chat_messages_${chatId}`;
@@ -422,15 +730,43 @@ const ConversationScreen = () => {
     const [currentStatus, setCurrentStatus] = useState<Chat['status'] | undefined>(initialStatus);
     
     const [isAssignModalVisible, setAssignModalVisible] = useState(false);
+    const [showBackButtonBadge, setShowBackButtonBadge] = useState(false);
+    const { totalUnreadCount, admins: adminsMap, setChats } = useChatContext();
     const adminsList = useMemo(() => Object.values(adminsMap), [adminsMap]);
+
+    // Try in-memory cache first to provide instant UX
+    useEffect(() => {
+        if (!chatId) return;
+        try {
+            const entry = getInMemoryCache(chatId);
+            if (entry && entry.messages && entry.messages.length) {
+                if ((global as any).__DEV__ || DEV_MSG_LOGGING) console.log('[chat] Using in-memory cache for', chatId, 'msgs', entry.messages.length);
+                // normalize createdAt back to Timestamp for UI/logic
+                const restored = entry.messages.map((m: any) => ({ ...m, createdAt: typeof m.createdAt === 'number' ? Timestamp.fromMillis(m.createdAt) : m.createdAt } as Message));
+                setLiveMessages(restored);
+                lastVisibleTimestampRef.current = entry.lastVisible || null;
+                lastVisibleDocIdRef.current = entry.lastVisibleDocId || null;
+                lastVisibleDocRef.current = entry.lastVisibleDoc || null;
+                cacheLoadedRef.current = true;
+            }
+        } catch (e) {
+            console.error('Error reading in-memory cache:', e);
+        }
+    }, [chatId]);
 
     // Load cached messages (if any) to make startup feel instant while we wait for snapshot
     useEffect(() => {
         if (!chatId) return;
+        let cancelled = false;
         (async () => {
             try {
                 const raw = await AsyncStorage.getItem(CACHE_KEY);
-                if (!raw) return;
+                if (cancelled) return;
+                if (!raw) {
+                    // no persisted cache
+                    cacheLoadedRef.current = true;
+                    return;
+                }
                 const parsed = JSON.parse(raw) as { messages?: Array<any>, lastVisible?: number, lastVisibleDocId?: string };
                 if (!parsed || !parsed.messages || !parsed.messages.length) {
                     cacheLoadedRef.current = true;
@@ -438,42 +774,64 @@ const ConversationScreen = () => {
                 }
                 // convert stored timestamps (ms) back to Timestamp
                 const cached = parsed.messages.map(p => ({ ...p, createdAt: Timestamp.fromMillis(p.createdAt), pending: false, failed: false } as Message));
+                if (cancelled) return;
                 // Merge cached messages with any existing live messages, but prefer server/live if present
                 setLiveMessages((prev) => {
-                    if (!prev || prev.length === 0) return cached;
+                    // If we already have messages (from in-memory), prefer those if they are newer
+                    if (!prev || prev.length === 0) {
+                        if ((global as any).__DEV__ || DEV_MSG_LOGGING) console.log('[chat] Using AsyncStorage cache for', chatId, 'msgs', cached.length);
+                        return cached;
+                    }
                     const prevNewest = prev[0]?.createdAt?.toMillis?.() || 0;
                     const cachedNewest = cached[0]?.createdAt?.toMillis?.() || 0;
-                    if (cachedNewest <= prevNewest) return prev; // keep newer server data
+                    if (cachedNewest <= prevNewest) return prev; // keep newer server or in-memory data
                     const map = new Map<string, Message>();
-                    for (const m of [...prev, ...cached]) {
+                    for (const m of [...cached, ...prev]) {
                         if (!m || !m.id) continue;
                         if (!map.has(m.id)) map.set(m.id, m);
                     }
                     const merged = Array.from(map.values()).sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
                     return merged;
                 });
+
                 lastVisibleTimestampRef.current = parsed.lastVisible || null;
                 lastVisibleDocIdRef.current = parsed.lastVisibleDocId || null;
                 // if we have docId, attempt to fetch its DocumentSnapshot to enable precise pagination
                 if (lastVisibleDocIdRef.current) {
                     try {
                         const snap = await getDoc(doc(db, 'chats', chatId, 'messages', lastVisibleDocIdRef.current));
-                        if (snap.exists()) lastVisibleDocRef.current = snap;
+                        if (!cancelled && snap.exists()) lastVisibleDocRef.current = snap;
                     } catch (err) {
                         console.error('Failed to fetch lastVisible doc by id:', err);
                         lastVisibleDocRef.current = null;
                     }
                 }
-                cacheLoadedRef.current = true; 
+
+                // mark that we loaded cache (either in-memory or AsyncStorage)
+                cacheLoadedRef.current = true;
+
+                // populate in-memory cache for next open (store numeric timestamps)
+                try {
+                    const stored = cached.map(m => ({ ...m, createdAt: m.createdAt?.toMillis ? m.createdAt.toMillis() : (typeof m.createdAt === 'number' ? m.createdAt : null) }));
+                    setInMemoryCache(chatId, { messages: stored, lastVisible: parsed.lastVisible, lastVisibleDocId: parsed.lastVisibleDocId, updatedAt: Date.now() });
+                } catch (e) { /* ignore */ }
+
             } catch (err) {
-                console.error('Failed to load cached messages:', err);
+                if (!cancelled) console.error('Failed to load cached messages:', err);
             }
         })();
+        return () => { cancelled = true; };
     }, [chatId]);
 
     // Persist recent messages (debounced) to AsyncStorage whenever messages change
     useEffect(() => {
         if (!chatId) return;
+        // update in-memory cache synchronously for instant subsequent opens
+        try {
+            const stored = combinedMessages.slice(0, MESSAGES_LIMIT).map(m => ({ ...m, createdAt: m.createdAt?.toMillis ? m.createdAt.toMillis() : (typeof m.createdAt === 'number' ? m.createdAt : null) }));
+            setInMemoryCache(chatId, { messages: stored, lastVisible: lastVisibleTimestampRef.current || undefined, lastVisibleDocId: lastVisibleDocIdRef.current || undefined, lastVisibleDoc: lastVisibleDocRef.current || undefined, updatedAt: Date.now() });
+        } catch (e) { /* ignore */ }
+
         if (cacheSaveTimerRef.current) {
             clearTimeout(cacheSaveTimerRef.current);
         }
@@ -545,12 +903,28 @@ const ConversationScreen = () => {
                         const isDifferentDay = olderDate.getFullYear() !== newerDate.getFullYear() || olderDate.getMonth() !== newerDate.getMonth() || olderDate.getDate() !== newerDate.getDate();
                         if (isDifferentDay) {
                             showTimeSeparator = true;
-                            const today = new Date();
-                            const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
-                            if (newerDate.getFullYear() === yesterday.getFullYear() && newerDate.getMonth() === yesterday.getMonth() && newerDate.getDate() === yesterday.getDate()) {
-                                separatorLabel = 'wczoraj';
+                            // Compute days difference based on start of day
+                            const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+                            const daysDiff = Math.round((startOfDay(new Date()).getTime() - startOfDay(newerDate).getTime()) / (1000 * 60 * 60 * 24));
+                            const time = newerDate.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+
+                            if (daysDiff === 0) {
+                                // newerDate is today -> show only time
+                                separatorLabel = time;
+                            } else if (daysDiff === 1) {
+                                separatorLabel = `wczoraj o ${time}`;
+                            } else if (daysDiff > 1 && daysDiff < 7) {
+                                // short weekday name in Polish (e.g., "czw.") + time
+                                const weekday = new Intl.DateTimeFormat('pl-PL', { weekday: 'short' }).format(newerDate);
+                                separatorLabel = `${weekday} o ${time}`;
                             } else {
-                                separatorLabel = newerDate.toLocaleDateString();
+                                const day = newerDate.getDate();
+                                const monthShort = new Intl.DateTimeFormat('pl-PL', { month: 'short' }).format(newerDate);
+                                if (newerDate.getFullYear() === new Date().getFullYear()) {
+                                    separatorLabel = `${day} ${monthShort} o ${time}`;
+                                } else {
+                                    separatorLabel = `${day} ${monthShort} ${newerDate.getFullYear()} o ${time}`;
+                                }
                             }
                         } else if (mins >= 10) {
                             showTimeSeparator = true;
@@ -668,223 +1042,8 @@ const ConversationScreen = () => {
         }
     }, [totalUnreadCount, chat]);
 
-    useEffect(() => {
-        if (!chatId || !user) return;
+    // Side-effects now run immediately on mount (no rAF) — cache changes retained
 
-        const chatDocRef = doc(db, 'chats', chatId);
-        const adminId = user.uid;
-
-        const goOnline = async () => {
-            try {
-                const docSnap = await getDoc(chatDocRef);
-                if (!docSnap.exists()) {
-                    console.warn("Chat does not exist, navigating back.");
-                    router.back();
-                    return;
-                }
-                const chatData = docSnap.data() as Chat;
-                if (chatData.activeAdminId !== adminId) {
-                    await updateDoc(chatDocRef, { activeAdminId: adminId });
-                }
-                 if (chatData.adminUnread > 0) {
-                   await updateDoc(chatDocRef, { adminUnread: 0, lastPushAt: null });
-                }
-            } catch (error) {
-                console.error("Error in goOnline:", error);
-            }
-        };
-
-        const goOffline = async () => {
-            try {
-                const docSnap = await getDoc(chatDocRef);
-                if (docSnap.exists() && docSnap.data().activeAdminId === adminId) {
-                    await updateDoc(chatDocRef, { activeAdminId: null });
-                }
-            } catch (error) {
-                console.error("Error in goOffline:", error);
-            }
-        };
-
-        goOnline();
-
-        const handleInitialLoad = async () => {
-            try {
-                const docSnap = await getDoc(chatDocRef);
-                if (!docSnap.exists()) {
-                    router.back();
-                    return;
-                }
-                const chatData = { id: docSnap.id, ...docSnap.data() } as Chat;
-                if (chatData.status === 'waiting') {
-                    const systemMessageText = "Konsultant dołączył do rozmowy!";
-                    const updates = {
-                        status: "active",
-                        operatorId: adminId,
-                        assignedAdminId: adminId,
-                        operatorJoinedAt: Timestamp.now(),
-                        lastMessage: systemMessageText,
-                        lastMessageSender: 'system',
-                        lastMessageTimestamp: Timestamp.now(),
-                        lastActivity: Timestamp.now(),
-                    };
-                    const batch = writeBatch(db);
-                    batch.update(chatDocRef, updates);
-                    const messagesCol = collection(db, 'chats', chatId, 'messages');
-                    batch.delete(doc(messagesCol, 'waiting_message'));
-                    batch.set(doc(collection(db, 'chats', chatId, 'messages')), { text: systemMessageText, sender: "system", createdAt: Timestamp.now() });
-                    await batch.commit();
-                }
-            } catch (error) {
-                console.error("Błąd podczas ładowania czatu:", error);
-                router.back();
-            }
-        };
-
-        handleInitialLoad();
-
-        const unsubChat = onSnapshot(chatDocRef, (doc) => {
-            if (doc.exists()) {
-                setChat({ id: doc.id, ...doc.data() } as Chat);
-            } else {
-                router.back();
-            }
-        });
-
-        const messagesQuery = query(collection(db, 'chats', chatId, 'messages'), orderBy('createdAt', 'desc'), limit(MESSAGES_LIMIT));
-        const unsubMessages = onSnapshot(messagesQuery, (snapshot) => {
-
-            if (firstSnapshotRef.current) {
-                // initial load -> populate live messages (merge-safe with cache)
-                const docs = snapshot.docs;
-                const msgs = docs
-                    .map(doc => ({ ...doc.data(), id: doc.id } as Message))
-                    .filter(m => {
-                        const hasText = !!(m.text && String(m.text).trim().length > 0);
-                        if (!hasText) {
-                            try { console.warn('[chat] Skipping empty initial message', { chatId, id: m.id, sender: m.sender, raw: m }); } catch (e) {}
-                        }
-                        return hasText;
-                    }); // ignore empty messages
-
-                setLiveMessages((prev) => {
-                    // If we have cached messages already loaded, merge and prefer server for duplicates
-                    if (cacheLoadedRef.current && prev && prev.length > 0) {
-                        const map = new Map<string, Message>();
-                        for (const m of [...msgs, ...prev]) {
-                            if (!m || !m.id) continue;
-                            if (!map.has(m.id)) map.set(m.id, m);
-                        }
-                        const merged = Array.from(map.values()).sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
-                        return merged;
-                    }
-                    // If server returned nothing but we had cached data, keep cached
-                    if (msgs.length === 0 && prev && prev.length > 0) return prev;
-                    // else use server-provided initial snapshot
-                    return msgs;
-                });
-
-                if (docs.length) lastVisibleTimestampRef.current = docs.length ? (docs[docs.length - 1].data() as any).createdAt?.toMillis?.() : null;
-                firstSnapshotRef.current = false;
-                setLoading(false);
-                return;
-            }
-
-            snapshot.docChanges().forEach((change) => {
-
-                const docData = { ...change.doc.data(), id: change.doc.id } as Message & any;
-                const docClientId = (change.doc.data() as Partial<Message>)?.clientId;
-
-                if (change.type === 'added') {
-                    // ignore empty messages
-                    if (!docData.text || String(docData.text).trim().length === 0) {
-                        try { console.warn('[chat] Skipping empty added message', { chatId, id: docData.id || change.doc.id, sender: docData.sender, raw: docData }); } catch (e) {}
-                        return;
-                    }
-
-                    setLiveMessages((prev) => {
-
-                        // If there is a local pending message with same clientId, replace it with server doc
-                        if (docClientId) {
-                            const idx = prev.findIndex(m => m.clientId === docClientId);
-                            if (idx !== -1) {
-                                const next = [...prev];
-                                next[idx] = docData;
-                                return next;
-                            }
-                        }
-
-                        // If we already have an item with the same server id, replace it (ensures UI updates)
-                        const existingIndexById = prev.findIndex(m => m.id === docData.id);
-                        if (existingIndexById !== -1) {
-                            const next = [...prev];
-                            next[existingIndexById] = docData;
-                            return next;
-                        }
-
-                        // If we already have a local pending message with the same clientId, replace it
-                        const existingIndexByClient = docClientId ? prev.findIndex(m => m.clientId === docClientId) : -1;
-                        if (existingIndexByClient !== -1) {
-                            const next = [...prev];
-                            next[existingIndexByClient] = docData;
-                            return next;
-                        }
-
-                        // If we have an entry that matches either id or clientId (safety), replace it; otherwise insert.
-                        const dupIndex = prev.findIndex(m => m.id === docData.id || (docClientId && m.clientId === docClientId));
-                        if (dupIndex !== -1) {
-                            const next = [...prev];
-                            next[dupIndex] = docData;
-                            return next;
-                        }
-
-                        const next = [...prev];
-                        const insertIndex = Math.min(change.newIndex, next.length);
-                        next.splice(insertIndex, 0, docData);
-                        if (next.length > MESSAGES_LIMIT) {
-                            const overflow = next.pop()!;
-                            setOlderMessages((old) => [overflow, ...old]);
-                        }
-                        return next;
-                    });
-                } else if (change.type === 'modified') {
-                    setLiveMessages((prev) => {
-                        const i = prev.findIndex(m => m.id === docData.id || m.clientId === docClientId);
-                        if (i === -1) {
-                            return prev;
-                        }
-                        const next = [...prev];
-                        next[i] = docData;
-                        return next;
-                    });
-                    setOlderMessages((prev) => {
-                        const i = prev.findIndex(m => m.id === docData.id || m.clientId === docClientId);
-                        if (i === -1) return prev;
-                        const next = [...prev];
-                        next[i] = docData;
-                        return next;
-                    });
-                } else if (change.type === 'removed') {
-                    setLiveMessages((prev) => prev.filter(m => m.id !== docData.id && m.clientId !== docClientId));
-                    setOlderMessages((prev) => prev.filter(m => m.id !== docData.id && m.clientId !== docClientId));
-                }
-            });
-        });
-        
-        const handleAppStateChange = (nextAppState: string) => {
-            if (nextAppState !== 'active') {
-                goOffline();
-            }
-        };
-
-        const appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
-
-        return () => {
-            unsubChat();
-            unsubMessages();
-            appStateSubscription.remove();
-            goOffline();
-        };
-    }, [chatId, user, router]);
 
 
     const handleSend = async () => {
@@ -1126,7 +1285,9 @@ const ConversationScreen = () => {
             router.back();
 
             // Remove from local list immediately
-            setChats(prev => prev.filter(c => c.id !== chatId));
+            setChats((prev: Chat[]) => prev.filter((c: Chat) => c.id !== chatId));
+            // clear in-memory cache for this chat to avoid stale data
+            try { inMemoryMessageCache.delete(chatId); } catch (e) { /* ignore */ }
 
             const batch = writeBatch(db);
             const messagesRef = collection(db, 'chats', chatId, 'messages');
@@ -1218,7 +1379,7 @@ const ConversationScreen = () => {
                 </AnimatedModal>
 
                 <View style={[styles.header, { borderBottomColor: themeColors.border }]}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon}>
+                    <TouchableOpacity onPress={() => { if (user) { (async () => { await goOfflineImmediate(chatId, user.uid); })(); } router.back(); }} style={styles.headerIcon}>
                         <Ionicons name="arrow-back" size={24} color={themeColors.text} />
                         {showBackButtonBadge && <View style={[styles.backButtonBadge, { backgroundColor: themeColors.danger, borderColor: themeColors.background }]} />}
                     </TouchableOpacity>
@@ -1331,10 +1492,12 @@ const styles = StyleSheet.create({
     avatarContainer: { width: 38, marginRight: 0,},
     messageContentContainer: { flexShrink: 1, },
     senderName: { fontSize: 13, color: '#666', marginBottom: 5, marginLeft: 10, fontWeight: '500' },
+    messageOuter: {},
+    bubbleWrapper: {},
     messageBubble: { paddingVertical: 10, paddingHorizontal: 15, },
     myMessageBubble: {},
     theirMessageBubble: { backgroundColor: '#f3f4f8', },
-    timestampContainer: { marginBottom: 6 },
+    timestampContainer: { marginBottom: 2 },
     timestampText: { fontSize: 12, color: '#777' },
     aiMessageBubble: { backgroundColor: '#e5e7eb', },
     soloBubble: { borderRadius: 20 },
