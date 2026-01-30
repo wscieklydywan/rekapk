@@ -8,9 +8,10 @@ interface TabTransitionProps {
   style?: ViewStyle | any;
   tabIndex?: number;
   quick?: boolean; // ultra-fast (for chat)
+  noAnimation?: boolean; // completely disable animations
 }
 
-export const TabTransition: React.FC<TabTransitionProps> = ({ children, style, tabIndex, quick }) => {
+export const TabTransition: React.FC<TabTransitionProps> = ({ children, style, tabIndex, quick, noAnimation }) => {
   const [reduceMotion, setReduceMotion] = useState(false);
 
   useEffect(() => {
@@ -25,9 +26,14 @@ export const TabTransition: React.FC<TabTransitionProps> = ({ children, style, t
     return () => { mounted = false; try { sub?.remove?.(); } catch (e) {} };
   }, []);
 
+  // If animations are disabled, return children without any wrapping
+  if (noAnimation) {
+    return <>{children}</>;
+  }
+
   // Determine durations (faster for snappier feel)
-  const baseEnter = quick ? 30 : 50;
-  const baseExit = quick ? 24 : 40;
+  const baseEnter = quick ? 10 : 50;
+  const baseExit = quick ? 8 : 40;
   const enterDuration = reduceMotion ? 0 : baseEnter;
   const exitDuration = reduceMotion ? 0 : baseExit;
 
@@ -70,9 +76,7 @@ export const TabTransition: React.FC<TabTransitionProps> = ({ children, style, t
 
   return (
     <Animated.View entering={enterAnim} exiting={exitAnim} layout={Layout.duration(enterDuration)} style={style}>
-      <Animated.View entering={FadeIn.duration(enterDuration)} exiting={FadeOut.duration(exitDuration)} style={{ flex: 1 }}>
-        {children}
-      </Animated.View>
+      {children}
     </Animated.View>
   );
 };

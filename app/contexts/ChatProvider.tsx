@@ -23,16 +23,19 @@ interface ChatContextType {
   chats: Chat[];
   setChats: React.Dispatch<React.SetStateAction<Chat[]>>;
   loading: boolean;
+  isLoadingMore: boolean;
+  hasMore: boolean;
+  loadMore: () => Promise<void>;
   totalUnreadCount: number;
   admins: { [key: string]: User };
 }
 
-const ChatContext = createContext<ChatContextType>({ chats: [], setChats: () => {}, loading: true, totalUnreadCount: 0, admins: {} });
+const ChatContext = createContext<ChatContextType>({ chats: [], setChats: () => {}, loading: true, isLoadingMore: false, hasMore: false, loadMore: async () => {}, totalUnreadCount: 0, admins: {} });
 
 export const useChatContext = () => useContext(ChatContext);
 
 export const ChatProvider: React.FC<{children: React.ReactNode}> = ({ children }) => {
-  const { chats, setChats, loading } = useChats();
+  const { chats, setChats, loading, isLoadingMore, hasMore, loadMore } = useChats({ pageSize: 30 });
   const [admins, setAdmins] = useState<{ [key: string]: User }>({});
   const prevChats = usePrevious(chats);
   const { appEnteredAt } = useSession();
@@ -89,7 +92,7 @@ export const ChatProvider: React.FC<{children: React.ReactNode}> = ({ children }
                     message: `Nowy czat od ${currentChat.userInfo.contact}`,
                     description: currentChat.lastMessage ?? '',
                     duration: 5000,
-                    onPress: () => router.push((`/conversation/${currentChat.id}`) as any),
+                    onPress: () => { router.push((`/conversation/${currentChat.id}`) as any); },
                     floating: true,
                     hideOnPress: true,
                     chatId: currentChat.id,
@@ -139,7 +142,7 @@ export const ChatProvider: React.FC<{children: React.ReactNode}> = ({ children }
                 message: `Wiadomość od ${currentChat.userInfo.contact}`,
                 description: currentChat.lastMessage,
                 duration: 5000,
-                onPress: () => router.push((`/conversation/${currentChat.id}`) as any),
+                onPress: () => { router.push((`/conversation/${currentChat.id}`) as any); },
                 floating: true,
                 hideOnPress: true,
                 chatId: currentChat.id,
@@ -173,7 +176,7 @@ export const ChatProvider: React.FC<{children: React.ReactNode}> = ({ children }
     return chats.reduce((sum, chat) => sum + (chat.adminUnread || 0), 0);
   }, [chats]);
 
-  const value = { chats, setChats, loading, totalUnreadCount, admins };
+  const value = { chats, setChats, loading, isLoadingMore, hasMore, loadMore, totalUnreadCount, admins };
 
   return (
     <ChatContext.Provider value={value}>

@@ -202,7 +202,7 @@ const SettingsScreen = () => {
   }
 
   return (
-    <TabTransition tabIndex={3} style={{ flex: 1, backgroundColor: themeColors.background }}>
+    <TabTransition tabIndex={3} quick={true} style={{ flex: 1, backgroundColor: themeColors.background }}>
 
       <ConfirmationModal visible={logoutModalVisible} onClose={() => setLogoutModalVisible(false)} title="Wylogowanie" message="Czy na pewno chcesz się wylogować?" confirmText="Wyloguj się" cancelText="Anuluj" onConfirm={handleLogout} variant="destructive" />
       <SelectionModal visible={modeSelectionModalVisible} onClose={() => setModeSelectionModalVisible(false)} title="Wybierz tryb powiadomień" options={selectionOptions} onSelect={handleModeUpdate} currentValue={notificationMode} />

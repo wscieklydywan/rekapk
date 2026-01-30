@@ -26,11 +26,12 @@ export const AnimatedModal = ({ visible, onClose, children, contentStyle, backdr
     let timeout: ReturnType<typeof setTimeout> | undefined;
 
     if (visible) {
+      // Avoid content fade-in (prevents transient visual blending on first frame)
+      opacity.value = 1;
       setMounted(true);
-      // animate in (faster, ~120ms)
+      // animate in (scale/translate only, faster ~120ms)
       scale.value = withTiming(1, { duration: 120, easing: Easing.out(Easing.exp) });
       translateY.value = withTiming(0, { duration: 120, easing: Easing.out(Easing.exp) });
-      opacity.value = withTiming(1, { duration: 120 });
     } else {
       // animate out with a soft fast fade (~120ms)
       scale.value = withTiming(0.96, { duration: 100 });

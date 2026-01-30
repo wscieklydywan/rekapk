@@ -148,17 +148,35 @@ const DismissibleBanner = ({
     }
     return { iconWrapSize: wrap, iconInnerSize: inner, normalizedIcon: norm };
   }, [screenWidth, icon, resolvedTitleColor]);
-
   // Slightly increase banner width by 1px over 92% to match visual request
   const bannerWidth = React.useMemo(() => Math.round(screenWidth * 0.92) + 1, [screenWidth]);
 
+  // Scale padding proportionally to screen width so banner height feels consistent on wide screens
+  const scaledPad = React.useMemo(() => {
+    const base = 14; // base pad in px
+    const minPad = 14;
+    const scale = screenWidth / 375; // 375 ~ baseline mobile width
+    return Math.max(minPad, Math.round(base * scale));
+  }, [screenWidth]);
+
+  // Make a non-alpha version of the resolved background for opaque edge strips
+  const resolvedBackgroundNoAlpha = React.useMemo(() => {
+    if (typeof resolvedBackground === 'string') {
+      const m = resolvedBackground.match(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)/);
+      if (m) return `rgba(${m[1]},${m[2]},${m[3]},1)`;
+    }
+    return resolvedBackground;
+  }, [resolvedBackground]);
+
   return (
     <PanGestureHandler onGestureEvent={onGestureEvent as any} onHandlerStateChange={onHandlerStateChange as any}>
-      <Animated.View
+          <Animated.View
         style={[
           styles.container,
           // make banner slightly higher (closer to top) and allow for safe-area
-          { top: Math.max(-1, insets.top - 5) },
+          // shifted up by 1px (insets.top - 6) per request
+          // shifted up further by 2px (insets.top - 8)
+          { top: Math.max(-1, insets.top - 8) },
           // combine base entrance offset with live gesture offset; keep X translation for horizontal swipes
           { transform: [{ translateY: Animated.add(baseY, gestureY) }, { translateX }] },
         ]} 
@@ -179,15 +197,36 @@ const DismissibleBanner = ({
         >
           {/* Simple translucent surface (no expo-blur) — narrower and with larger internal padding */}
           <View
-            style={[
-              styles.banner,
-              isFlash
-                ? { borderRadius: 0, width: '100%', shadowOpacity: 0, elevation: 0, paddingTop: Math.max(62, insets.top + 52), paddingBottom: 62 }
-                : { paddingVertical: 62, paddingHorizontal: 20, width: bannerWidth },
-              { backgroundColor: resolvedBackground },
-              style,
-            ]}
+            // Merge incoming `style` but enforce a minimum filled material vertically
+            // so callers cannot shrink the visible banner area by passing small paddings.
+            style={(() => {
+              const incoming = StyleSheet.flatten(style) || {};
+              const { padding, paddingVertical, paddingTop, paddingBottom, paddingHorizontal, ...restStyle } = incoming as any;
+
+              const providedTop = paddingTop ?? paddingVertical ?? padding ?? 0;
+              const providedBottom = paddingBottom ?? paddingVertical ?? padding ?? 0;
+
+              if (isFlash) {
+                const finalTop = Math.max(scaledPad, Math.max(providedTop, insets.top + 6));
+                const finalBottom = Math.max(scaledPad, providedBottom);
+                return [
+                  styles.banner,
+                  { borderRadius: 0, width: '100%', shadowOpacity: 0, elevation: 0, paddingTop: finalTop, paddingBottom: finalBottom, paddingHorizontal: paddingHorizontal ?? 20 },
+                  { backgroundColor: resolvedBackground },
+                  restStyle,
+                ];
+              }
+              const finalTop = Math.max(scaledPad, providedTop);
+              const finalBottom = Math.max(scaledPad, providedBottom);
+              return [
+                styles.banner,
+                { paddingTop: finalTop, paddingBottom: finalBottom, paddingHorizontal: paddingHorizontal ?? 20, width: bannerWidth },
+                { backgroundColor: resolvedBackground },
+                restStyle,
+              ];
+            })()}
           >
+
             <View style={styles.row}>
               {icon ? (
                 <View style={[styles.iconWrap, { width: iconWrapSize, height: iconWrapSize, borderRadius: iconWrapSize / 2, backgroundColor: 'rgba(0,0,0,0.06)' }]}>
@@ -216,7 +255,7 @@ const DismissibleBanner = ({
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    top: 10,
+    top: 7,
     left: 0,
     right: 0,
     zIndex: 1000,
@@ -228,7 +267,7 @@ const styles = StyleSheet.create({
   banner: {
     minWidth: '80%',
     borderRadius: 14,
-    paddingVertical: 62,
+      paddingVertical: 14,
     paddingHorizontal: 18,
     shadowColor: '#000',
     // lower shadow intensity to reduce compositing cost

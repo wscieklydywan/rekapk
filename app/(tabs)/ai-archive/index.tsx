@@ -3,13 +3,17 @@ import { ConfirmationModal } from '@/components/ConfirmationModal';
 import TabTransition from '@/components/TabTransition';
 import { ANIM_FADE_DURATION, ANIM_TRANSLATE_DURATION } from '@/constants/animations';
 import { Colors } from '@/constants/theme';
+import { useTapHighlight } from '@/hooks/useTapHighlight';
 import { db } from '@/lib/firebase';
+import { deleteCollectionInBatches } from '@/lib/firestore-utils';
+import { showMessage } from '@/lib/showMessage';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRouter } from 'expo-router';
-import { collection, doc, getDocs, onSnapshot, orderBy, query, writeBatch } from 'firebase/firestore';
-import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
-import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { collection, deleteDoc, doc, onSnapshot, orderBy, query } from 'firebase/firestore';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { cancelAnimation, Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 
 // Typy
@@ -26,17 +30,33 @@ const AiConversationListItem = ({ item, themeColors, selectionMode, isSelected, 
     // Wyświetlamy datę ostatniej aktywności, która odpowiada sortowaniu
     const date = item.lastActivity?.toDate ? new Date(item.lastActivity.toDate()) : new Date();
 
-    const formattedDate = date.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    const formattedTime = date.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+    const formattedDate = React.useMemo(() => {
+        const d = date;
+        const now = new Date();
+        const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+        const daysDiff = Math.round((startOfDay(now).getTime() - startOfDay(d).getTime()) / (1000 * 60 * 60 * 24));
+        const time = d.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
 
-    const handlePress = () => {
-        if (selectionMode) {
-            isSelected ? onDeselect(item.id) : onSelect(item.id);
-        } else {
-            // POPRAWKA: Użycie poprawnej ścieżki nawigacji
-            router.push((`/ai-archive/${item.id}`) as any);
+        if (daysDiff === 0) return time;
+        if (daysDiff === 1) return `wczoraj o ${time}`;
+        if (daysDiff > 1 && daysDiff < 7) {
+            const weekday = new Intl.DateTimeFormat('pl-PL', { weekday: 'short' }).format(d);
+            return `${weekday} o ${time}`;
         }
-    };
+        const day = d.getDate();
+        const monthShort = new Intl.DateTimeFormat('pl-PL', { month: 'short' }).format(d);
+        if (d.getFullYear() === now.getFullYear()) return `${day} ${monthShort} o ${time}`;
+        return `${day} ${monthShort} ${d.getFullYear()} o ${time}`;
+    }, [date]);
+
+    const { isPressed, handlePress } = useTapHighlight(() => {
+        if (selectionMode) {
+            // If selection mode active, do selection toggle immediately instead of navigation
+            isSelected ? onDeselect(item.id) : onSelect(item.id);
+            return;
+        }
+        router.push((`/ai-archive/${item.id}`) as any);
+    });
 
     const handleLongPress = () => {
         if (!selectionMode) {
@@ -51,7 +71,7 @@ const AiConversationListItem = ({ item, themeColors, selectionMode, isSelected, 
     });
 
     return (
-        <TouchableOpacity onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomColor: themeColors.border }, isSelected && { backgroundColor: themeColors.selection }]}>
+        <Pressable onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomColor: themeColors.border }, (isSelected || isPressed) && { backgroundColor: themeColors.selection }]}>
             {selectionMode && (
                 <Animated.View entering={FadeIn.duration(ANIM_FADE_DURATION)} exiting={FadeOut.duration(ANIM_FADE_DURATION)} style={styles.checkboxContainer}>
                     <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={isSelected ? themeColors.tint : themeColors.textMuted}/>
@@ -67,13 +87,22 @@ const AiConversationListItem = ({ item, themeColors, selectionMode, isSelected, 
                 </View>
             </Animated.View>
             <View style={styles.metaContainer}>
-                <Text style={[styles.timestamp, { color: themeColors.textMuted }]}>{`${formattedDate} ${formattedTime}`}</Text>
+                <Text style={[styles.timestamp, { color: themeColors.textMuted }]}>{formattedDate}</Text>
                 <Text style={[styles.messageCount, { color: themeColors.textMuted }]}>{`Wiadomości: ${item.messageCount || 0}`}</Text>
             </View>
-        </TouchableOpacity>
+        </Pressable>
     );
 };
 
+const AiConversationListItemMemo = React.memo(AiConversationListItem, (prev, next) => {
+    const sameId = prev.item.id === next.item.id;
+    const sameSelected = prev.isSelected === next.isSelected;
+    const sameSelectionMode = prev.selectionMode === next.selectionMode;
+    const sameCount = (prev.item.messageCount || 0) === (next.item.messageCount || 0);
+    
+    if (!sameId || !sameSelected || !sameSelectionMode || !sameCount) return false;
+    return true;
+});
 
 const AiArchiveScreen = () => {
     const theme = useColorScheme() ?? 'light';
@@ -84,9 +113,37 @@ const AiArchiveScreen = () => {
     const [loading, setLoading] = useState(true);
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedItems, setSelectedItems] = useState<string[]>([]);
+    const [canScroll, setCanScroll] = useState(false);
     const [modalConfig, setModalConfig] = useState<any>(null);
     const modalLockRef = useRef(false);
     const modalTimerRef = useRef<number | null>(null);
+    const containerHeightRef = useRef<number>(0);
+    const contentHeightRef = useRef<number>(0);
+    const jellyY = useSharedValue(0);
+    const canScrollSV = useSharedValue(false);
+    const JELLY_MULT = 6;
+
+    const jellyStyle = useAnimatedStyle(() => ({ transform: [{ translateY: jellyY.value }] }));
+
+    const AnimatedFlatList = Animated.createAnimatedComponent(FlatList) as unknown as typeof FlatList;
+
+    const makeGestureForList = useCallback(() => {
+        const isScrollable = contentHeightRef.current > containerHeightRef.current;
+        if (isScrollable) return Gesture.Tap();
+
+        return Gesture.Pan()
+            .activeOffsetY([-5, 5])
+            .failOffsetX([-10, 10])
+            .onUpdate((e) => {
+                if (canScrollSV.value) return;
+                const damped = Math.tanh(e.translationY / 90) * JELLY_MULT;
+                jellyY.value = damped;
+            })
+            .onEnd(() => {
+                try { cancelAnimation(jellyY); } catch (e) {}
+                jellyY.value = withTiming(0, { duration: 160, easing: Easing.out(Easing.cubic) });
+            });
+    }, []);
     const closeModal = () => {
         if (Platform.OS === 'web' && typeof document !== 'undefined') {
             try {
@@ -105,8 +162,8 @@ const AiArchiveScreen = () => {
                 };
                 doBlur();
                 setTimeout(doBlur, 10);
-                setTimeout(doBlur, 140);
-                setTimeout(doBlur, 300);
+                setTimeout(doBlur, 60);
+                setTimeout(doBlur, 120);
             } catch (e) { /* ignore */ }
         }
 
@@ -115,8 +172,8 @@ const AiArchiveScreen = () => {
 
         setModalConfig(null);
         modalLockRef.current = true;
-        try { if (typeof window !== 'undefined') { (window as any).__modalIsClosing = true; (window as any).__modalSuppressedUntil = Date.now() + 720; } } catch(e) {}
-        setTimeout(() => { try { if (typeof window !== 'undefined') (window as any).__modalIsClosing = false; } catch(e) {} modalLockRef.current = false; }, 660);
+        try { if (typeof window !== 'undefined') { (window as any).__modalIsClosing = true; (window as any).__modalSuppressedUntil = Date.now() + 280; } } catch(e) {}
+        setTimeout(() => { try { if (typeof window !== 'undefined') (window as any).__modalIsClosing = false; } catch(e) {} modalLockRef.current = false; }, 260);
     };
 
     const showModal = (config: { title: string; message?: string; confirmText?: string; onConfirm?: () => void; cancelText?: string; variant?: 'destructive' | 'secondary' }) => {
@@ -127,10 +184,17 @@ const AiArchiveScreen = () => {
                 const delay = Math.max(until - now + 60, 420);
                 if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
                 modalTimerRef.current = window.setTimeout(() => {
+                    const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+                    const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+                    if ((global as any).__DEV__ && hadEmptyString) {
+                        console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                        console.warn(new Error().stack);
+                    }
+                    const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
                     if (modalLockRef.current) {
-                        modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                        modalTimerRef.current = window.setTimeout(() => { setModalConfig(normalized); modalTimerRef.current = null; }, 420);
                     } else {
-                        setModalConfig(config as any);
+                        setModalConfig(normalized);
                         modalTimerRef.current = null;
                     }
                 }, delay);
@@ -144,9 +208,14 @@ const AiArchiveScreen = () => {
                     if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
                     modalTimerRef.current = window.setTimeout(() => {
                         if (modalLockRef.current) {
-                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                            modalTimerRef.current = window.setTimeout(() => {
+                                const normalized = { title: config.title ?? '', message: config.message ?? '', confirmText: config.confirmText ?? 'OK', cancelText: config.cancelText, onConfirm: config.onConfirm, variant: config.variant } as any;
+                                setModalConfig(normalized);
+                                modalTimerRef.current = null;
+                            }, 420);
                         } else {
-                            setModalConfig(config as any);
+                            const normalized = { title: config.title ?? '', message: config.message ?? '', confirmText: config.confirmText ?? 'OK', cancelText: config.cancelText, onConfirm: config.onConfirm, variant: config.variant } as any;
+                            setModalConfig(normalized);
                             modalTimerRef.current = null;
                         }
                     }, delay);
@@ -157,9 +226,26 @@ const AiArchiveScreen = () => {
 
         if (modalLockRef.current) {
             if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
-            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+            modalTimerRef.current = window.setTimeout(() => {
+                const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+                const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+                if ((global as any).__DEV__ && hadEmptyString) {
+                    console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                    console.warn(new Error().stack);
+                }
+                const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
+                setModalConfig(normalized);
+                modalTimerRef.current = null;
+            }, 420);
         } else {
-            setModalConfig(config as any);
+            const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+            const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+            if ((global as any).__DEV__ && hadEmptyString) {
+                console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                console.warn(new Error().stack);
+            }
+            const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
+            setModalConfig(normalized);
         }
     }; 
 
@@ -197,21 +283,20 @@ const AiArchiveScreen = () => {
             closeModal();
             exitSelectionMode();
             
+            // optimistic remove
+            const prev = allConversations;
             setAllConversations(prevConvs => prevConvs.filter(conv => !itemsToDelete.includes(conv.id)));
 
             try {
-                const batch = writeBatch(db);
+                // delete each conversation's messages in safe chunks, then remove its document
                 for (const conversationId of itemsToDelete) {
-                    const messagesRef = collection(db, 'ai_conversations', conversationId, 'messages');
-                    const messagesSnapshot = await getDocs(messagesRef);
-                    messagesSnapshot.forEach(doc => batch.delete(doc.ref));
-
-                    const convDocRef = doc(db, 'ai_conversations', conversationId);
-                    batch.delete(convDocRef);
+                    await deleteCollectionInBatches(db, collection(db, 'ai_conversations', conversationId, 'messages'));
+                    await deleteDoc(doc(db, 'ai_conversations', conversationId));
                 }
-                await batch.commit();
             } catch (error) {
                 console.error("Błąd podczas usuwania rozmów:", error);
+                try { setAllConversations(prev); } catch (e) { /* ignore */ }
+                showMessage({ message: 'Usuwanie nie powiodło się', description: 'Nie udało się usunąć rozmów — przywrócono listę.', duration: 4000, position: 'bottom', floating: true, backgroundColor: themeColors.danger + 'EE', color: '#fff', style: { alignSelf: 'center', minWidth: 260, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16 } });
             }
         };
         
@@ -231,23 +316,25 @@ const AiArchiveScreen = () => {
     const selectionHeaderStyle = useAnimatedStyle(() => ({ opacity: headerOpacityAnim.value }));
 
     return (
-        <TabTransition tabIndex={2} style={{ flex: 1, backgroundColor: themeColors.background }}>
-            <ConfirmationModal
-                visible={!!modalConfig}
+        <TabTransition tabIndex={2} quick={true} style={{ flex: 1, backgroundColor: themeColors.background }}>
+            {modalConfig?.title && modalConfig?.confirmText && (
+              <ConfirmationModal
+                visible={true}
                 onClose={closeModal}
-                title={modalConfig?.title || ''}
-                message={modalConfig?.message || ''}
-                confirmText={modalConfig?.confirmText || ''}
-                cancelText={modalConfig?.cancelText}
-                variant={modalConfig?.variant}
+                title={modalConfig.title}
+                message={modalConfig.message || ''}
+                confirmText={modalConfig.confirmText}
+                cancelText={modalConfig.cancelText}
+                variant={modalConfig.variant}
                 onConfirm={() => {
                     const onConfirmAction = modalConfig?.onConfirm;
                     closeModal();
                     if (onConfirmAction) {
-                        setTimeout(() => { try { onConfirmAction(); } catch (e) { console.error(e); } }, 320);
+                        setTimeout(() => { try { onConfirmAction(); } catch (e) { console.error(e); } }, 160);
                     }
                 }}
-            />
+              />
+            )}
             <View style={styles.headerArea}>
                  <Animated.View style={[styles.headerWrapper, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
                     <View style={[styles.mainHeader, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
@@ -256,11 +343,11 @@ const AiArchiveScreen = () => {
                 </Animated.View>
                 <Animated.View style={[styles.headerWrapper, selectionHeaderStyle]} pointerEvents={selectionMode ? 'auto' : 'none'}>
                     <View style={[styles.mainHeader, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border, justifyContent: 'space-between' }]}>
-                        <TouchableOpacity onPress={exitSelectionMode}><Text style={{ color: themeColors.tint, fontSize: 17, fontWeight: '600' }}>Anuluj</Text></TouchableOpacity>
+                        <Pressable onPress={exitSelectionMode}><Text style={{ color: themeColors.tint, fontSize: 17, fontWeight: '600' }}>Anuluj</Text></Pressable>
                         <Text style={[styles.selectionTitle, {color: themeColors.text}]}>{`Zaznaczono: ${selectedItems.length}`}</Text>
-                        <TouchableOpacity onPress={handleDeleteSelected} disabled={selectedItems.length === 0}>
+                        <Pressable onPress={handleDeleteSelected} disabled={selectedItems.length === 0}>
                             <Ionicons name="trash-outline" size={24} color={selectedItems.length > 0 ? themeColors.danger : themeColors.textMuted} />
-                        </TouchableOpacity>
+                        </Pressable>
                     </View>
                 </Animated.View>
             </View>
@@ -268,14 +355,35 @@ const AiArchiveScreen = () => {
             {loading && allConversations.length === 0 ? (
                 <ActivityIndicator style={{ flex: 1 }} />
             ) : (
-                <FlatList
-                    data={allConversations}
-                    keyExtractor={(item) => item.id}
-                    renderItem={({ item }) => <AiConversationListItem item={item} themeColors={themeColors} selectionMode={selectionMode} isSelected={selectedItems.includes(item.id)} onSelect={handleSelect} onDeselect={handleDeselect} />}
-                    ListEmptyComponent={<Text style={styles.emptyListText}>Brak rozmów</Text>}
-                    contentContainerStyle={{ paddingTop: 10 }}
-                    extraData={{selectionMode, selectedItems}}
-                />
+                <View style={{ flex: 1 }} onLayout={(e) => { containerHeightRef.current = e.nativeEvent.layout.height; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}>
+                    { (contentHeightRef.current > containerHeightRef.current) ? (
+                        <AnimatedFlatList
+                            data={allConversations}
+                            keyExtractor={(item) => item.id}
+                            renderItem={({ item }) => <AiConversationListItemMemo item={item} themeColors={themeColors} selectionMode={selectionMode} isSelected={selectedItems.includes(item.id)} onSelect={handleSelect} onDeselect={handleDeselect} />}
+                            ListEmptyComponent={<Text style={styles.emptyListText}>Brak rozmów</Text>}
+                            contentContainerStyle={{ paddingTop: 10 }}
+                            extraData={{selectionMode, selectedItems}}
+                            scrollEnabled={true}
+                            onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
+                        />
+                    ) : (
+                        <GestureDetector gesture={makeGestureForList()}>
+                            <Animated.View style={[{ flex: 1 }, jellyStyle]}>
+                                <AnimatedFlatList
+                                    data={allConversations}
+                                    keyExtractor={(item) => item.id}
+                                    renderItem={({ item }) => <AiConversationListItemMemo item={item} themeColors={themeColors} selectionMode={selectionMode} isSelected={selectedItems.includes(item.id)} onSelect={handleSelect} onDeselect={handleDeselect} />}
+                                    ListEmptyComponent={<Text style={styles.emptyListText}>Brak rozmów</Text>}
+                                    contentContainerStyle={{ paddingTop: 10 }}
+                                    extraData={{selectionMode, selectedItems}}
+                                    scrollEnabled={false}
+                                    onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
+                                />
+                            </Animated.View>
+                        </GestureDetector>
+                    )}
+                </View>
             )}
 
         </TabTransition>

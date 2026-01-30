@@ -4,16 +4,19 @@ import { ConfirmationModal } from '@/components/ConfirmationModal';
 import TabTransition from '@/components/TabTransition';
 import { ANIM_FADE_DURATION, ANIM_TRANSLATE_DURATION } from '@/constants/animations';
 import { Colors } from '@/constants/theme';
+import { useTapHighlight } from '@/hooks/useTapHighlight';
 import { showMessage } from '@/lib/showMessage';
 import { ContactForm } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
-import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { cancelAnimation, Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 import { db } from '@/lib/firebase';
-import { collection, doc, getDocs, writeBatch } from 'firebase/firestore';
+import { deleteCollectionInBatches } from '@/lib/firestore-utils';
+import { collection, deleteDoc, doc } from 'firebase/firestore';
 
 const categoryTranslations: { [key: string]: string } = {
     'websites': 'Strony Internetowe',
@@ -53,20 +56,22 @@ const Avatar = ({ contactName }: { contactName: string }) => {
     );
 };
 
+const AnimatedFlatList = Animated.createAnimatedComponent(FlatList) as unknown as typeof FlatList;
+
 const FormListItem = ({ item, themeColors, selectionMode, isSelected, onSelect, onDeselect }: { item: ContactForm, themeColors: any, selectionMode: boolean, isSelected: boolean, onSelect: (id: string) => void, onDeselect: (id: string) => void }) => {
     const router = useRouter();
     const isUnread = item.adminUnread > 0;
 
-    const handlePress = () => {
+    const { isPressed, handlePress } = useTapHighlight(() => {
         if (selectionMode) {
             isSelected ? onDeselect(item.id) : onSelect(item.id);
-        } else {
-             router.push({
-                pathname: `/forms/${item.id}`,
-                params: { contactName: item.userInfo.contact || 'Formularz' }
-            } as any);
+            return;
         }
-    };
+        router.push({
+            pathname: `/forms/${item.id}`,
+            params: { contactName: item.userInfo.contact || 'Formularz' }
+        } as any);
+    });
 
     const handleLongPress = () => {
         if (!selectionMode) {
@@ -74,7 +79,25 @@ const FormListItem = ({ item, themeColors, selectionMode, isSelected, onSelect, 
         }
     };
 
-    const formattedDate = item.createdAt?.toDate ? new Date(item.createdAt.toDate()).toLocaleDateString('pl-PL', { day: 'numeric', month: 'short' }) : '';
+    const formattedDate = React.useMemo(() => {
+        if (!item.createdAt?.toDate) return '';
+        const d = new Date(item.createdAt.toDate());
+        const now = new Date();
+        const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+        const daysDiff = Math.round((startOfDay(now).getTime() - startOfDay(d).getTime()) / (1000 * 60 * 60 * 24));
+        const time = d.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+
+        if (daysDiff === 0) return time;
+        if (daysDiff === 1) return `wczoraj o ${time}`;
+        if (daysDiff > 1 && daysDiff < 7) {
+            const weekday = new Intl.DateTimeFormat('pl-PL', { weekday: 'short' }).format(d);
+            return `${weekday} o ${time}`;
+        }
+        const day = d.getDate();
+        const monthShort = new Intl.DateTimeFormat('pl-PL', { month: 'short' }).format(d);
+        if (d.getFullYear() === now.getFullYear()) return `${day} ${monthShort} o ${time}`;
+        return `${day} ${monthShort} ${d.getFullYear()} o ${time}`;
+    }, [item.createdAt]);
     
     const animatedContentStyle = useAnimatedStyle(() => {
         return {
@@ -83,7 +106,7 @@ const FormListItem = ({ item, themeColors, selectionMode, isSelected, onSelect, 
     });
 
     return (
-        <TouchableOpacity onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, isSelected && { backgroundColor: themeColors.selection }]}>
+        <Pressable onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, (isSelected || isPressed) && { backgroundColor: themeColors.selection }]}>
              {selectionMode && (
                 <Animated.View entering={FadeIn.duration(ANIM_FADE_DURATION)} exiting={FadeOut.duration(ANIM_FADE_DURATION)} style={styles.checkboxContainer}>
                     <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={isSelected ? themeColors.tint : themeColors.textMuted}/>
@@ -106,9 +129,19 @@ const FormListItem = ({ item, themeColors, selectionMode, isSelected, onSelect, 
                     </View>
                 </View>
             </Animated.View>
-        </TouchableOpacity>
+        </Pressable>
     );
 };
+
+const FormListItemMemo = React.memo(FormListItem, (prev, next) => {
+    const sameId = prev.item.id === next.item.id;
+    const sameSelected = prev.isSelected === next.isSelected;
+    const sameSelectionMode = prev.selectionMode === next.selectionMode;
+    const sameName = (prev.item.userInfo?.contact || null) === (next.item.userInfo?.contact || null);
+    
+    if (!sameId || !sameSelected || !sameSelectionMode || !sameName) return false;
+    return true;
+});
 
 const FormsListScreen = () => {
     const theme = useColorScheme() ?? 'light';
@@ -118,9 +151,35 @@ const FormsListScreen = () => {
 
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedItems, setSelectedItems] = useState<string[]>([]);
+    const [canScroll, setCanScroll] = useState(false);
     const [modalConfig, setModalConfig] = useState<any>(null);
     const modalLockRef = useRef(false);
     const modalTimerRef = useRef<number | null>(null);
+    const containerHeightRef = useRef<number>(0);
+    const contentHeightRef = useRef<number>(0);
+    const jellyY = useSharedValue(0);
+    const canScrollSV = useSharedValue(false);
+    const JELLY_MULT = 6;
+
+    const jellyStyle = useAnimatedStyle(() => ({ transform: [{ translateY: jellyY.value }] }));
+
+    const makeGestureForList = useCallback(() => {
+        const isScrollable = contentHeightRef.current > containerHeightRef.current;
+        if (isScrollable) return Gesture.Tap();
+
+        return Gesture.Pan()
+            .activeOffsetY([-5, 5])
+            .failOffsetX([-10, 10])
+            .onUpdate((e) => {
+                if (canScrollSV.value) return;
+                const damped = Math.tanh(e.translationY / 90) * JELLY_MULT;
+                jellyY.value = damped;
+            })
+            .onEnd(() => {
+                try { cancelAnimation(jellyY); } catch (e) {}
+                jellyY.value = withTiming(0, { duration: 160, easing: Easing.out(Easing.cubic) });
+            });
+    }, []);
     const closeModal = () => {
         if (Platform.OS === 'web' && typeof document !== 'undefined') {
             try {
@@ -139,8 +198,8 @@ const FormsListScreen = () => {
                 };
                 doBlur();
                 setTimeout(doBlur, 10);
-                setTimeout(doBlur, 140);
-                setTimeout(doBlur, 300);
+                setTimeout(doBlur, 60);
+                setTimeout(doBlur, 120);
             } catch (e) { /* ignore */ }
         }
 
@@ -149,8 +208,8 @@ const FormsListScreen = () => {
 
         setModalConfig(null);
         modalLockRef.current = true;
-        try { if (typeof window !== 'undefined') { (window as any).__modalIsClosing = true; (window as any).__modalSuppressedUntil = Date.now() + 720; } } catch(e) {}
-        setTimeout(() => { try { if (typeof window !== 'undefined') (window as any).__modalIsClosing = false; } catch(e) {} modalLockRef.current = false; }, 660);
+        try { if (typeof window !== 'undefined') { (window as any).__modalIsClosing = true; (window as any).__modalSuppressedUntil = Date.now() + 280; } } catch(e) {}
+        setTimeout(() => { try { if (typeof window !== 'undefined') (window as any).__modalIsClosing = false; } catch(e) {} modalLockRef.current = false; }, 260);
     };
 
     const showModal = (config: { title: string; message?: string; confirmText?: string; onConfirm?: () => void; cancelText?: string; variant?: 'destructive' | 'secondary' }) => {
@@ -162,9 +221,14 @@ const FormsListScreen = () => {
                 if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
                 modalTimerRef.current = window.setTimeout(() => {
                     if (modalLockRef.current) {
-                        modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                        modalTimerRef.current = window.setTimeout(() => {
+                            const normalized = { title: config.title ?? '', message: config.message ?? '', confirmText: config.confirmText ?? 'OK', cancelText: config.cancelText, onConfirm: config.onConfirm, variant: config.variant } as any;
+                            setModalConfig(normalized);
+                            modalTimerRef.current = null;
+                        }, 420);
                     } else {
-                        setModalConfig(config as any);
+                        const normalized = { title: config.title ?? '', message: config.message ?? '', confirmText: config.confirmText ?? 'OK', cancelText: config.cancelText, onConfirm: config.onConfirm, variant: config.variant } as any;
+                        setModalConfig(normalized);
                         modalTimerRef.current = null;
                     }
                 }, delay);
@@ -177,10 +241,17 @@ const FormsListScreen = () => {
                     const delay = until - now + 40;
                     if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
                     modalTimerRef.current = window.setTimeout(() => {
+                        const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+                        const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+                        if ((global as any).__DEV__ && hadEmptyString) {
+                            console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                            console.warn(new Error().stack);
+                        }
+                        const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
                         if (modalLockRef.current) {
-                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(normalized); modalTimerRef.current = null; }, 420);
                         } else {
-                            setModalConfig(config as any);
+                            setModalConfig(normalized);
                             modalTimerRef.current = null;
                         }
                     }, delay);
@@ -191,9 +262,26 @@ const FormsListScreen = () => {
 
         if (modalLockRef.current) {
             if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
-            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+            modalTimerRef.current = window.setTimeout(() => {
+                const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+                const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+                if ((global as any).__DEV__ && hadEmptyString) {
+                    console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                    console.warn(new Error().stack);
+                }
+                const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
+                setModalConfig(normalized);
+                modalTimerRef.current = null;
+            }, 420);
         } else {
-            setModalConfig(config as any);
+            const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+            const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+            if ((global as any).__DEV__ && hadEmptyString) {
+                console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                console.warn(new Error().stack);
+            }
+            const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
+            setModalConfig(normalized);
         }
     }; 
 
@@ -230,22 +318,20 @@ const FormsListScreen = () => {
             closeModal();
             exitSelectionMode();
             
+            // optimistic remove
+            const prev = forms;
             setForms(prevForms => prevForms.filter(form => !itemsToDelete.includes(form.id)));
 
             try {
-                const batch = writeBatch(db);
                 for (const formId of itemsToDelete) {
-                    const messagesRef = collection(db, 'contact_forms', formId, 'messages');
-                    const messagesSnapshot = await getDocs(messagesRef);
-                    messagesSnapshot.forEach(doc => batch.delete(doc.ref));
-                    
-                    const formDocRef = doc(db, 'contact_forms', formId);
-                    batch.delete(formDocRef);
+                    await deleteCollectionInBatches(db, collection(db, 'contact_forms', formId, 'messages'));
+                    await deleteDoc(doc(db, 'contact_forms', formId));
                 }
-                await batch.commit();
             } catch (error) {
                 console.error("Błąd podczas usuwania formularzy i ich wiadomości:", error);
-                showMessage({ message: 'Błąd', description: 'Nie udało się usunąć formularzy. Odśwież listę, aby zobaczyć aktualny stan.', type: 'danger', position: 'bottom', floating: true, backgroundColor: themeColors.danger, color: '#fff', style: { borderRadius: 8, marginHorizontal: 12, paddingVertical: 8 } });
+                // rollback UI + show compact error toast
+                try { setForms(prev); } catch (e) { /* ignore */ }
+                showMessage({ message: 'Usuwanie nie powiodło się', description: 'Nie udało się usunąć wybranych formularzy — przywrócono listę.', duration: 4000, position: 'bottom', floating: true, backgroundColor: themeColors.danger + 'EE', color: '#fff', style: { alignSelf: 'center', minWidth: 260, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16 } });
             }
         };
         
@@ -265,23 +351,25 @@ const FormsListScreen = () => {
     const selectionHeaderStyle = useAnimatedStyle(() => ({ opacity: headerOpacityAnim.value }));
 
     return (
-        <TabTransition tabIndex={1} style={{ flex: 1, backgroundColor: themeColors.background }}>
-            <ConfirmationModal
-                visible={!!modalConfig}
+        <TabTransition tabIndex={1} quick={true} style={{ flex: 1, backgroundColor: themeColors.background }}>
+            {modalConfig?.title && modalConfig?.confirmText && (
+              <ConfirmationModal
+                visible={true}
                 onClose={closeModal}
-                title={modalConfig?.title || ''}
-                message={modalConfig?.message || ''}
-                confirmText={modalConfig?.confirmText || ''}
-                cancelText={modalConfig?.cancelText}
-                variant={modalConfig?.variant}
+                title={modalConfig.title}
+                message={modalConfig.message || ''}
+                confirmText={modalConfig.confirmText}
+                cancelText={modalConfig.cancelText}
+                variant={modalConfig.variant}
                 onConfirm={() => {
                     const onConfirmAction = modalConfig?.onConfirm;
                     closeModal();
                     if (onConfirmAction) {
-                        setTimeout(() => { try { onConfirmAction(); } catch (e) { console.error(e); } }, 320);
+                        setTimeout(() => { try { onConfirmAction(); } catch (e) { console.error(e); } }, 160);
                     }
                 }}
-            />
+              />
+            )}
             <View style={styles.headerArea}>
                 <Animated.View style={[styles.headerWrapper, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
                     <View style={[styles.mainHeader, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
@@ -290,41 +378,79 @@ const FormsListScreen = () => {
                 </Animated.View>
                 <Animated.View style={[styles.headerWrapper, selectionHeaderStyle]} pointerEvents={selectionMode ? 'auto' : 'none'}>
                     <View style={[styles.mainHeader, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border, justifyContent: 'space-between' }]}>
-                        <TouchableOpacity onPress={exitSelectionMode}><Text style={{ color: themeColors.tint, fontSize: 17, fontWeight: '600' }}>Anuluj</Text></TouchableOpacity>
+                        <Pressable onPress={exitSelectionMode}><Text style={{ color: themeColors.tint, fontSize: 17, fontWeight: '600' }}>Anuluj</Text></Pressable>
                         <Text style={[styles.selectionTitle, {color: themeColors.text}]}>{`Zaznaczono: ${selectedItems.length}`}</Text>
-                        <TouchableOpacity onPress={handleDeleteSelected} disabled={selectedItems.length === 0}>
+                        <Pressable onPress={handleDeleteSelected} disabled={selectedItems.length === 0}>
                             <Ionicons name="trash-outline" size={24} color={selectedItems.length > 0 ? themeColors.danger : themeColors.textMuted} />
-                        </TouchableOpacity>
+                        </Pressable>
                     </View>
                 </Animated.View>
             </View>
 
-            {loading && forms.length === 0 ? 
-                <ActivityIndicator style={{ flex: 1 }} size="large" color={themeColors.tint} /> :
-                <FlatList
-                    data={sortedForms}
-                    keyExtractor={(item) => item.id}
-                    renderItem={({ item }) => (
-                        <FormListItem 
-                            item={item} 
-                            themeColors={themeColors} 
-                            selectionMode={selectionMode} 
-                            isSelected={selectedItems.includes(item.id)} 
-                            onSelect={handleSelect} 
-                            onDeselect={handleDeselect} 
+            {loading && forms.length === 0 ? (
+                <ActivityIndicator style={{ flex: 1 }} size="large" color={themeColors.tint} />
+            ) : (
+                <View style={{ flex: 1 }} onLayout={(e) => { containerHeightRef.current = e.nativeEvent.layout.height; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}>
+                    { /* Render AnimatedFlatList directly when scrollable, otherwise wrap in GestureDetector */ }
+                    { (contentHeightRef.current > containerHeightRef.current) ? (
+                        <AnimatedFlatList
+                            data={sortedForms}
+                            keyExtractor={(item) => item.id}
+                            renderItem={({ item }) => (
+                                <FormListItemMemo 
+                                    item={item} 
+                                    themeColors={themeColors} 
+                                    selectionMode={selectionMode} 
+                                    isSelected={selectedItems.includes(item.id)} 
+                                    onSelect={handleSelect} 
+                                    onDeselect={handleDeselect} 
+                                />
+                            )}
+                            ListEmptyComponent={
+                                <View style={styles.emptyContainer}>
+                                    <Ionicons name="mail-outline" size={50} color={themeColors.textMuted} />
+                                    <Text style={[styles.emptyText, { color: themeColors.textMuted }]}>Twoja skrzynka jest pusta</Text>
+                                </View>
+                            }
+                            contentContainerStyle={styles.listContainer}
+                            ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: themeColors.border }]} />}
+                            extraData={{ selectionMode, selectedItems }}
+                            scrollEnabled={true}
+                            onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
                         />
+                    ) : (
+                        <GestureDetector gesture={makeGestureForList()}>
+                            <Animated.View style={[{ flex: 1 }, jellyStyle]}>
+                                <AnimatedFlatList
+                                    data={sortedForms}
+                                    keyExtractor={(item) => item.id}
+                                    renderItem={({ item }) => (
+                                        <FormListItemMemo 
+                                            item={item} 
+                                            themeColors={themeColors} 
+                                            selectionMode={selectionMode} 
+                                            isSelected={selectedItems.includes(item.id)} 
+                                            onSelect={handleSelect} 
+                                            onDeselect={handleDeselect} 
+                                        />
+                                    )}
+                                    ListEmptyComponent={
+                                        <View style={styles.emptyContainer}>
+                                            <Ionicons name="mail-outline" size={50} color={themeColors.textMuted} />
+                                            <Text style={[styles.emptyText, { color: themeColors.textMuted }]}>Twoja skrzynka jest pusta</Text>
+                                        </View>
+                                    }
+                                    contentContainerStyle={styles.listContainer}
+                                    ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: themeColors.border }]} />}
+                                    extraData={{ selectionMode, selectedItems }}
+                                    scrollEnabled={false}
+                                    onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
+                                />
+                            </Animated.View>
+                        </GestureDetector>
                     )}
-                    ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <Ionicons name="mail-outline" size={50} color={themeColors.textMuted} />
-                            <Text style={[styles.emptyText, { color: themeColors.textMuted }]}>Twoja skrzynka jest pusta</Text>
-                        </View>
-                    }
-                    contentContainerStyle={styles.listContainer}
-                    ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: themeColors.border }]} />}
-                    extraData={{ selectionMode, selectedItems }}
-                />
-            }
+                </View>
+            )}
 
         </TabTransition>
     );

@@ -1,11 +1,13 @@
 
 import { Colors } from '@/constants/theme';
 import { db } from '@/lib/firebase';
+import { deleteCollectionInBatches } from '@/lib/firestore-utils';
+import { showMessage } from '@/lib/showMessage';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { collection, deleteDoc, doc, getDoc, getDocs, query, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, query } from 'firebase/firestore';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, InteractionManager, Platform, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { TouchableOpacity } from 'react-native-gesture-handler';
 
 
@@ -118,10 +120,17 @@ const AiConversationDetailScreen = () => {
                     const delay = until - now + 40;
                     if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
                     modalTimerRef.current = window.setTimeout(() => {
+                        const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+                        const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+                        if ((global as any).__DEV__ && hadEmptyString) {
+                            console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                            console.warn(new Error().stack);
+                        }
+                        const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
                         if (modalLockRef.current) {
-                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(normalized); modalTimerRef.current = null; }, 420);
                         } else {
-                            setModalConfig(config as any);
+                            setModalConfig(normalized);
                             modalTimerRef.current = null;
                         }
                     }, delay);
@@ -132,53 +141,67 @@ const AiConversationDetailScreen = () => {
 
         if (modalLockRef.current) {
             if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
-            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+            modalTimerRef.current = window.setTimeout(() => {
+                const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+                const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+                if ((global as any).__DEV__ && hadEmptyString) {
+                    console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                    console.warn(new Error().stack);
+                }
+                const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
+                setModalConfig(normalized);
+                modalTimerRef.current = null;
+            }, 420);
         } else {
-            setModalConfig(config as any);
+            const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+            const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+            if ((global as any).__DEV__ && hadEmptyString) {
+                console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                console.warn(new Error().stack);
+            }
+            const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
+            setModalConfig(normalized);
         }
     }; 
 
     useEffect(() => {
         navigation.setOptions({ headerShown: false });
         
-        const task = InteractionManager.runAfterInteractions(() => {
-            const fetchConversation = async () => {
-                if (!id) return;
-                
-                try {
-                    const docRef = doc(db, 'ai_conversations', id);
-                    const docSnap = await getDoc(docRef);
+        // Run fetch immediately (no InteractionManager) — keep list/detail fast and predictable.
+        const fetchConversation = async () => {
+            if (!id) return;
 
-                    if (docSnap.exists()) {
-                        setConversationInfo({ id: docSnap.id, ...docSnap.data() } as AiConversationInfo);
-                    } else {
-                        if (router.canGoBack()) router.back();
-                    }
+            try {
+                const docRef = doc(db, 'ai_conversations', id);
+                const docSnap = await getDoc(docRef);
 
-                    const messagesQuery = query(collection(db, "ai_conversations", id, "messages"));
-                    const messagesSnapshot = await getDocs(messagesQuery);
-                    
-                    let fetchedMessages = messagesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as AiMessage[];
-
-                    fetchedMessages.sort((a, b) => {
-                        const dateA = a.timestamp?.toDate ? a.timestamp.toDate().getTime() : 0;
-                        const dateB = b.timestamp?.toDate ? b.timestamp.toDate().getTime() : 0;
-                        return dateA - dateB;
-                    });
-
-                    setMessages(fetchedMessages);
-
-                } catch (error) {
-                    console.error("Błąd podczas pobierania rozmowy:", error);
-                } finally {
-                    setLoading(false);
+                if (docSnap.exists()) {
+                    setConversationInfo({ id: docSnap.id, ...docSnap.data() } as AiConversationInfo);
+                } else {
+                    if (router.canGoBack()) router.back();
                 }
-            };
 
-            fetchConversation();
-        });
+                const messagesQuery = query(collection(db, "ai_conversations", id, "messages"));
+                const messagesSnapshot = await getDocs(messagesQuery);
 
-        return () => task.cancel();
+                let fetchedMessages = messagesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as AiMessage[];
+
+                fetchedMessages.sort((a, b) => {
+                    const dateA = a.timestamp?.toDate ? a.timestamp.toDate().getTime() : 0;
+                    const dateB = b.timestamp?.toDate ? b.timestamp.toDate().getTime() : 0;
+                    return dateA - dateB;
+                });
+
+                setMessages(fetchedMessages);
+
+            } catch (error) {
+                console.error("Błąd podczas pobierania rozmowy:", error);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchConversation();
     }, [id]);
 
     const handleDelete = async () => {
@@ -186,15 +209,12 @@ const AiConversationDetailScreen = () => {
             if (!id) return;
             closeModal();
             try {
-                const messagesRef = collection(db, 'ai_conversations', id, 'messages');
-                const messagesSnapshot = await getDocs(messagesRef);
-                const batch = writeBatch(db);
-                messagesSnapshot.docs.forEach(doc => batch.delete(doc.ref));
-                await batch.commit();
+                await deleteCollectionInBatches(db, collection(db, 'ai_conversations', id, 'messages'));
 
                 await deleteDoc(doc(db, 'ai_conversations', id));
             } catch (error) {
                 console.error("Błąd podczas usuwania rozmowy:", error);
+                showMessage({ message: 'Usuwanie nie powiodło się', description: 'Nie udało się usunąć rozmowy — spróbuj ponownie.', duration: 4000, position: 'bottom', floating: true, backgroundColor: themeColors.danger + 'EE', color: '#fff', style: { alignSelf: 'center', minWidth: 260, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16 } });
             }
         };
 

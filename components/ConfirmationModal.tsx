@@ -37,10 +37,16 @@ export const ConfirmationModal = ({
         let timeout: ReturnType<typeof setTimeout> | undefined;
 
         if (visible) {
+            // Make content fully opaque immediately to avoid transient blending
+            // during the first render frame (this was causing the "cancel"
+            // button to momentarily look different). We still animate scale for
+            // the pop effect and animate the backdrop separately for the dim.
+            opacity.value = 1;
+            // mount synchronously so the very first frame is already opaque
             setMounted(true);
-            // animate in
+
+            // animate in (scale only — no content fade)
             scale.value = withTiming(1, { duration: 200, easing: Easing.out(Easing.exp) });
-            opacity.value = withTiming(1, { duration: 150 });
             backdropOpacity.value = withTiming(1, { duration: 150 });
         } else {
             if (Platform.OS === 'web') {
@@ -53,6 +59,7 @@ export const ConfirmationModal = ({
             } else {
                 // animate out (native)
                 scale.value = withTiming(0.95, { duration: 200 });
+                // fade content out on exit to keep closing smooth
                 opacity.value = withTiming(0, { duration: 160 });
                 backdropOpacity.value = withTiming(0, { duration: 180 });
                 // wait for animation to finish before unmounting
@@ -79,6 +86,14 @@ export const ConfirmationModal = ({
         confirmButtonBgColor = themeColors.danger;
     } else if (variant === 'secondary') {
         confirmButtonBgColor = themeColors.secondary;
+    }
+
+    // If caller passed a transient/empty config, silently skip render.
+    // This is a normal UI transient (parent may set `visible` before filling props)
+    // — not an application error, so avoid LogBox spam.
+    const hasReadableContent = !!((title && String(title).trim()) || (message && String(message).trim()) || (confirmText && String(confirmText).trim()));
+    if (!hasReadableContent) {
+      return null;
     }
 
     if (!mounted) return null;

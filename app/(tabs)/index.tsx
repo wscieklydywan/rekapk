@@ -1,18 +1,24 @@
 
 import { useChatContext } from '@/app/contexts/ChatProvider';
+import { hideNotificationForChat } from '@/app/contexts/NotificationContext';
 import TabTransition from '@/components/TabTransition';
 import { addAnimationListener, getAnimationsEnabled, removeAnimationListener } from '@/components/animationPreference';
+import { ANIM_FADE_DURATION, ANIM_TRANSLATE_DURATION } from '@/constants/animations';
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/useAuth';
 import { db } from '@/lib/firebase';
+import { deleteCollectionInBatches } from '@/lib/firestore-utils';
 import { Chat, User } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { collection, doc, getDocs, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc } from 'firebase/firestore';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, FlatList, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
-import type { SharedValue } from 'react-native-reanimated';
-import Animated, { Easing, FadeIn, FadeOut, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { AccessibilityInfo, ActivityIndicator, FlatList, InteractionManager, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { Gesture, GestureDetector, NativeViewGestureHandler } from 'react-native-gesture-handler';
+import PagerView from 'react-native-pager-view';
+import Animated, { cancelAnimation, Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+
+const AnimatedFlatList = Animated.createAnimatedComponent(FlatList) as unknown as typeof FlatList;
 
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 
@@ -26,7 +32,6 @@ const statusColors = {
     closed: '#9B9B9B'
 };
 
-import { ANIM_FADE_DURATION, ANIM_TRANSLATE_DURATION } from '@/constants/animations';
 
 // Animation constants (shared across tabs)
 
@@ -90,59 +95,94 @@ interface ChatListItemProps {
     item: Chat;
     themeColors: { [key: string]: string };
     filter: FilterType;
-    // NOTE: we avoid passing `selectionMode` as a prop that triggers rerenders for every item.
-    // Instead we pass a shared value for animations and a ref for JS checks.
-    selectionShared?: SharedValue<number>;
     selectionModeRef?: React.MutableRefObject<boolean>;
+    selectionMode?: boolean;
     onSelect: (id: string) => void;
     onDeselect: (id: string) => void;
     isSelected: boolean;
     assignedAdmin?: User | null;
+    itemIndex?: number;
 }
 
-const ChatListItemComponent = ({ item, themeColors, filter, selectionShared, selectionModeRef, onSelect, onDeselect, isSelected, assignedAdmin }: ChatListItemProps) => {
+const PERF_DEBUG = !!(global as any).__PERF_DEBUG__ || false;
+
+const ChatListItemComponent = ({ item, themeColors, filter, selectionModeRef, selectionMode = false, onSelect, onDeselect, isSelected, assignedAdmin, itemIndex = 0 }: ChatListItemProps) => {
     const router = useRouter();
+    const [isPressed, setIsPressed] = useState(false);
 
-    // Use a helper to read current selection mode for JS handlers without causing rerenders
-    const isSelectionMode = useCallback(() => !!selectionModeRef?.current, [selectionModeRef]);
+    // PERF: render timing (diagnostic, no-op unless __PERF_DEBUG__ is true)
+    const _renderStartRef = useRef<number | null>(null);
+    if (PERF_DEBUG) _renderStartRef.current = Date.now();
+    useEffect(() => {
+        if (!PERF_DEBUG) return;
+        const dur = Date.now() - (_renderStartRef.current || 0);
+        if (dur > 8) console.warn(`[perf][ChatListItem] render ${item.id} ${dur}ms`);
+    });
 
-    const formatChatTimestamp = (ts?: any) => {
+    // `selectionMode` prop drives rendering; `selectionModeRef` remains for handlers to read immediately without rerendering
+
+    const formattedTimestamp = useMemo(() => {
+        const ts = item.lastMessageTimestamp;
         if (!ts) return '';
-        const date = ts.toDate ? ts.toDate() : new Date(ts);
+        const date = ts.toDate ? ts.toDate() : (ts instanceof Date ? ts : new Date(ts as any));
         const now = new Date();
-        const isToday = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-        if (isToday) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-        const yesterday = new Date(now);
-        yesterday.setDate(now.getDate() - 1);
-        const isYesterday = date.getFullYear() === yesterday.getFullYear() && date.getMonth() === yesterday.getMonth() && date.getDate() === yesterday.getDate();
-        if (isYesterday) return 'wczoraj';
+        const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+        const daysDiff = Math.round((startOfDay(now).getTime() - startOfDay(date).getTime()) / (1000 * 60 * 60 * 24));
 
-        // older: show localized short date
-        return date.toLocaleDateString();
-    };
+        // Today -> show time
+        if (daysDiff === 0) return date.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+
+        // Yesterday
+        if (daysDiff === 1) return 'wczoraj';
+
+        // Within last week -> weekday short (e.g., "śr.")
+        if (daysDiff > 1 && daysDiff < 7) {
+            const weekday = new Intl.DateTimeFormat('pl-PL', { weekday: 'short' }).format(date);
+            return weekday;
+        }
+
+        // Older -> show day + short month, include year if different
+        const day = date.getDate();
+        const monthShort = new Intl.DateTimeFormat('pl-PL', { month: 'short' }).format(date);
+        if (date.getFullYear() === now.getFullYear()) {
+            return `${day} ${monthShort}`;
+        }
+        return `${day} ${monthShort} ${date.getFullYear()}`;
+    }, [item.lastMessageTimestamp]);
 
     const handlePress = () => {
-        if (isSelectionMode()) {
+        if (selectionModeRef?.current || selectionMode) {
             isSelected ? onDeselect(item.id) : onSelect(item.id);
         } else {
+            setIsPressed(true);
             const contactName = encodeURIComponent(item.userInfo.contact || '');
             // If a notification banner is shown for this specific chat, hide it when user opens it directly from list
-            try { require('@/app/contexts/NotificationContext').hideNotificationForChat(item.id); } catch (e) { /* ignore */ }
+            try { hideNotificationForChat?.(item.id); } catch (e) { /* ignore */ }
+
+            // instrument navigation latency (console.time started just before navigation)
+            try { console.time('openChat'); } catch (e) { /* ignore */ }
+
+            // Navigate immediately without frame delay
+            setIsPressed(false);
             router.push((`/conversation/${item.id}?status=${item.status}&lastFilter=${filter}&contactName=${contactName}`) as any);
         }
     };
 
     const handleLongPress = () => {
-        if (!isSelectionMode()) {
+        if (!(selectionModeRef?.current || selectionMode)) {
             onSelect(item.id);
         }
     };
+
+    useEffect(() => {
+        return () => {};
+    }, []);
     
     const animatedContentStyle = useAnimatedStyle(() => {
-        const target = (selectionShared ? (selectionShared.value ? 40 : 0) : (isSelectionMode() ? 40 : 0));
-        const tx = withTiming(target, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) });
-        return { transform: [{ translateX: tx }] };
+        return {
+            marginLeft: withTiming(selectionMode ? 40 : 0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) })
+        };
     });
 
     const messagePreview = useMemo(() => item.lastMessage ? (item.lastMessageSender === 'admin' ? `Ty: ${item.lastMessage}` : item.lastMessage) : 'Oczekiwanie na wiadomość...', [item.lastMessage, item.lastMessageSender]);
@@ -170,17 +210,13 @@ const ChatListItemComponent = ({ item, themeColors, filter, selectionShared, sel
     }, [item.adminUnread, item.status]);
 
     return (
-        <TouchableOpacity onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomColor: themeColors.border }, isSelected && { backgroundColor: themeColors.selection }]}>
-            {/* Checkbox: always rendered, visibility driven by a shared animated value to avoid mount/unmount and large synchronous commits */}
-            <Animated.View style={[styles.checkboxContainer]} pointerEvents={isSelected ? 'auto' : 'none'}>
-                {/* checkbox animation: opacity/scale with timing for a smoother feel */}
-                <Animated.View style={useAnimatedStyle(() => {
-                    const v = selectionShared ? selectionShared.value : (isSelectionMode() ? 1 : 0);
-                    return { opacity: withTiming(v, { duration: ANIM_FADE_DURATION }), transform: [{ scale: withTiming(0.9 + 0.1 * v, { duration: ANIM_FADE_DURATION }) }] };
-                })}>
+        <Pressable onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomColor: themeColors.border }, (isSelected || isPressed) && { backgroundColor: themeColors.selection }]}>
+            {/* Checkbox: animated entering/exiting to match other tabs */}
+            {selectionMode && (
+                <Animated.View entering={FadeIn.duration(ANIM_FADE_DURATION)} exiting={FadeOut.duration(ANIM_FADE_DURATION)} style={styles.checkboxContainer} pointerEvents={isSelected ? 'auto' : 'none'}>
                     <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={isSelected ? themeColors.tint : themeColors.textMuted}/>
                 </Animated.View>
-            </Animated.View>
+            )}
 
             <Animated.View style={[styles.slidingContainer, animatedContentStyle]}>
                 <View style={styles.avatarContainer}>
@@ -209,28 +245,50 @@ const ChatListItemComponent = ({ item, themeColors, filter, selectionShared, sel
                 </View>
             </Animated.View>
             <View style={styles.metaContainer}>
-                <Text style={[styles.timestamp, { color: themeColors.textMuted }]}>{formatChatTimestamp(item.lastMessageTimestamp)}</Text>
+                <Text style={[styles.timestamp, { color: themeColors.textMuted }]}>{formattedTimestamp}</Text>
                 <View style={statusInfo.style}><Text style={styles.statusText}>{statusInfo.text}</Text></View>
             </View>
-        </TouchableOpacity>
+        </Pressable>
     );
 };
 
 const ChatListItem = React.memo(ChatListItemComponent, (prev, next) => {
-    return prev.item.id === next.item.id &&
-        prev.isSelected === next.isSelected &&
-        (prev.assignedAdmin?.id || null) === (next.assignedAdmin?.id || null);
+    // Quick checks that should prevent re-render in common cases
+    const sameId = prev.item.id === next.item.id;
+    const sameSelected = prev.isSelected === next.isSelected;
+    const sameAssigned = (prev.assignedAdmin?.id || null) === (next.assignedAdmin?.id || null);
+
+    // If selection mode changed, re-render so items can slide in/out
+    if ((prev.selectionMode || false) !== (next.selectionMode || false)) return false;
+
+    if (!sameId || !sameSelected || !sameAssigned) return false; // Different - re-render
+
+    // Check key mutable fields that should trigger an update when changed
+    if (prev.item.lastMessage !== next.item.lastMessage) return false;
+    if ((prev.item.lastMessageSender || null) !== (next.item.lastMessageSender || null)) return false;
+    if ((prev.item.status || null) !== (next.item.status || null)) return false;
+    if ((prev.item.userIsBanned || false) !== (next.item.userIsBanned || false)) return false;
+    if ((prev.item.adminUnread || 0) !== (next.item.adminUnread || 0)) return false;
+    if ((prev.item.userUnread || 0) !== (next.item.userUnread || 0)) return false;
+
+    // Compare timestamps using numeric millis if present
+    const prevTs = prev.item.lastMessageTimestamp && (prev.item.lastMessageTimestamp as any).toMillis ? (prev.item.lastMessageTimestamp as any).toMillis() : (prev.item.lastMessageTimestamp || 0);
+    const nextTs = next.item.lastMessageTimestamp && (next.item.lastMessageTimestamp as any).toMillis ? (next.item.lastMessageTimestamp as any).toMillis() : (next.item.lastMessageTimestamp || 0);
+    if (prevTs !== nextTs) return false;
+
+    return true; // Same - skip re-render
 });
 
 const ActiveChatsScreen = () => {
     const theme = useColorScheme() ?? 'light';
-    const themeColors = { ...Colors[theme], selection: theme === 'light' ? '#E8F0FE' : '#2A2A3D', danger: '#FF3B30' };
+    const themeColors = useMemo(() => ({ ...Colors[theme], selection: theme === 'light' ? '#E8F0FE' : '#2A2A3D', danger: '#FF3B30' }), [theme]);
     const { displayName } = useAuth();
     const navigation = useNavigation();
+    const router = useRouter();
     const params = useLocalSearchParams<{ lastFilter?: string }>();
     
     const [filter, setFilter] = useState<FilterType>((params.lastFilter as FilterType) || 'all');
-    const { chats: allChats, loading, setChats, admins } = useChatContext(); 
+    const { chats: allChats, loading, setChats, admins, loadMore, hasMore, isLoadingMore } = useChatContext(); 
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedChats, setSelectedChats] = useState<string[]>([]);
     const [modalConfig, setModalConfig] = useState<{ title: string; message: string; confirmText: string; onConfirm: () => void; cancelText?: string; variant?: 'destructive' | 'secondary'; } | null>(null);
@@ -240,10 +298,9 @@ const ActiveChatsScreen = () => {
 
 
 
-    // Shared value & ref to avoid forcing full-list React rerenders when toggling selection mode.
-    const selectionShared = useSharedValue(selectionMode ? 1 : 0);
+    // Shared ref to track selection mode without forcing rerenders
     const selectionModeRef = useRef(selectionMode);
-    useEffect(() => { selectionModeRef.current = selectionMode; selectionShared.value = withTiming(selectionMode ? 1 : 0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) }); }, [selectionMode]);
+    useEffect(() => { selectionModeRef.current = selectionMode; }, [selectionMode]);
 
     // Selected set for fast lookup; used in stable renderItem to avoid O(n) includes
     const selectedSet = useMemo(() => new Set(selectedChats), [selectedChats]);
@@ -269,8 +326,8 @@ const ActiveChatsScreen = () => {
                 };
                 doBlur();
                 setTimeout(doBlur, 10);
-                setTimeout(doBlur, 140);
-                setTimeout(doBlur, 300);
+                setTimeout(doBlur, 60);
+                setTimeout(doBlur, 120);
             } catch (e) { /* ignore */ }
         }
 
@@ -279,8 +336,8 @@ const ActiveChatsScreen = () => {
 
         setModalConfig(null);
         modalLockRef.current = true;
-        try { if (typeof window !== 'undefined') { (window as any).__modalIsClosing = true; (window as any).__modalSuppressedUntil = Date.now() + 720; } } catch(e) {}
-        setTimeout(() => { try { if (typeof window !== 'undefined') (window as any).__modalIsClosing = false; } catch(e) {} modalLockRef.current = false; }, 660);
+        try { if (typeof window !== 'undefined') { (window as any).__modalIsClosing = true; (window as any).__modalSuppressedUntil = Date.now() + 280; } } catch(e) {}
+        setTimeout(() => { try { if (typeof window !== 'undefined') (window as any).__modalIsClosing = false; } catch(e) {} modalLockRef.current = false; }, 260);
     };
 
     const showModal = (config: { title: string; message: string; confirmText?: string; onConfirm?: () => void; cancelText?: string; variant?: 'destructive' | 'secondary' }) => {
@@ -292,9 +349,14 @@ const ActiveChatsScreen = () => {
                 if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
                 modalTimerRef.current = window.setTimeout(() => {
                     if (modalLockRef.current) {
-                        modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                        modalTimerRef.current = window.setTimeout(() => {
+                            const normalized = { title: config.title ?? '', message: config.message ?? '', confirmText: config.confirmText ?? 'OK', cancelText: config.cancelText, onConfirm: config.onConfirm, variant: config.variant } as any;
+                            setModalConfig(normalized);
+                            modalTimerRef.current = null;
+                        }, 420);
                     } else {
-                        setModalConfig(config as any);
+                        const normalized = { title: config.title ?? '', message: config.message ?? '', confirmText: config.confirmText ?? 'OK', cancelText: config.cancelText, onConfirm: config.onConfirm, variant: config.variant } as any;
+                        setModalConfig(normalized);
                         modalTimerRef.current = null;
                     }
                 }, delay);
@@ -307,10 +369,17 @@ const ActiveChatsScreen = () => {
                     const delay = until - now + 40;
                     if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
                     modalTimerRef.current = window.setTimeout(() => {
+                        const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+                        const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+                        if ((global as any).__DEV__ && hadEmptyString) {
+                            console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                            console.warn(new Error().stack);
+                        }
+                        const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
                         if (modalLockRef.current) {
-                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(normalized); modalTimerRef.current = null; }, 420);
                         } else {
-                            setModalConfig(config as any);
+                            setModalConfig(normalized);
                             modalTimerRef.current = null;
                         }
                     }, delay);
@@ -321,9 +390,26 @@ const ActiveChatsScreen = () => {
 
         if (modalLockRef.current) {
             if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
-            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+            modalTimerRef.current = window.setTimeout(() => {
+                const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+                const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+                if ((global as any).__DEV__ && hadEmptyString) {
+                    console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                    console.warn(new Error().stack);
+                }
+                const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
+                setModalConfig(normalized);
+                modalTimerRef.current = null;
+            }, 420);
         } else {
-            setModalConfig(config as any);
+            const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+            const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+            if ((global as any).__DEV__ && hadEmptyString) {
+                console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                console.warn(new Error().stack);
+            }
+            const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
+            setModalConfig(normalized);
         }
     };  
 
@@ -333,8 +419,6 @@ const ActiveChatsScreen = () => {
         // Ensure selection logic flips immediately for handlers (so taps start selecting immediately)
         selectionModeRef.current = true;
         setSelectionMode(true);
-        // Also animate shared value to 1 to show visuals
-        selectionShared.value = withTiming(1, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) });
     };
 
     const exitSelectionMode = () => {
@@ -342,9 +426,6 @@ const ActiveChatsScreen = () => {
         selectionModeRef.current = false;
         setSelectionMode(false);
         setSelectedChats([]);
-
-        // Animate the shared value (controls both header opacity and item translateX)
-        selectionShared.value = withTiming(0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) });
     };
 
     const handleSelect = useCallback((chatId: string) => {
@@ -364,25 +445,79 @@ const ActiveChatsScreen = () => {
         });
     }, []);
 
+    // ========== CLEAN JELLY + SCROLL LOGIC ==========
+    // Jelly is ONLY for short lists (non-scrollable)
+    // Long lists use pure native scroll, no handlers
+    
+    const pageContentHeights = useRef<Record<number, number>>({});
+    const containerHeightRef = useRef<number>(0);
+    const currentPageSV = useSharedValue(0);
+    const canScrollSV = useSharedValue(false);
+    const [canScroll, setCanScroll] = useState(false);
+
+    const jellyY = useSharedValue(0);
+    const JELLY_MULT = 6;
+    const JELLY_RELEASE_DURATION = 120; // ms, tuned for snappier return
+
+    const jellyStyle = useAnimatedStyle(() => ({
+        transform: [{ translateY: jellyY.value }]
+    }));
+
+    // Refs and offsets per long list to allow cancelling momentum
+    const listRefs = useRef<Record<number, React.RefObject<any>>>({});
+    const listOffsets = useRef<Record<number, number>>({});
+
+    const horizontalSwipeGestureForPage = useCallback((pageIndex: number) => {
+        return Gesture.Pan()
+            // Activate only for clear horizontal moves
+            .activeOffsetX([-12, 12])
+            // small vertical motion shouldn't fail horizontal detection
+            .failOffsetY([-10, 10])
+            .onStart(() => {
+                try {
+                    const ref = listRefs.current[pageIndex];
+                    const off = listOffsets.current[pageIndex] || 0;
+                    if (ref?.current?.scrollToOffset) {
+                        ref.current.scrollToOffset({ offset: off, animated: false });
+                    }
+                } catch (e) { /* ignore */ }
+            })
+            .onEnd((e) => {
+                try {
+                    const dx = e.translationX || 0;
+                    if (Math.abs(dx) > 30) {
+                        const dir = dx < 0 ? 1 : -1; // left -> next page, right -> prev page
+                        const target = Math.max(0, Math.min(filters.length - 1, pageIndex + dir));
+                        if (pagerRef.current && typeof (pagerRef.current as any).setPage === 'function') {
+                            try { (pagerRef.current as any).setPage(target); } catch (e) {}
+                        }
+                    }
+                } catch (e) { /* ignore */ }
+            });
+    }, []);
+
+    // NOTE: do NOT reuse a single Gesture instance across multiple GestureDetectors.
+    // Create gesture instances per-list inside render to avoid "Handler with tag X already exists".
+
     const handleDeleteSelected = async () => {
         const performDelete = async () => {
             const chatsToDelete = [...selectedChats];
             closeModal();
             exitSelectionMode();
             
+            // optimistic remove from UI
+            const prev = allChats;
             setChats((prevChats: Chat[]) => prevChats.filter((chat: Chat) => !chatsToDelete.includes(chat.id)));
             try {
-                const batch = writeBatch(db);
                 for (const chatId of chatsToDelete) {
-                    const messagesRef = collection(db, 'chats', chatId, 'messages');
-                    const messagesSnapshot = await getDocs(messagesRef);
-                    messagesSnapshot.forEach(messageDoc => batch.delete(messageDoc.ref));
-                    batch.delete(doc(db, 'chats', chatId));
+                    await deleteCollectionInBatches(db, collection(db, 'chats', chatId, 'messages'));
+                    await deleteDoc(doc(db, 'chats', chatId));
                 }
-                await batch.commit();
             } catch (error) {
                 console.error("Błąd podczas usuwania czatów:", error);
-                showMessage({ message: 'Błąd', description: 'Nie udało się usunąć czatów. Odśwież listę, aby zobaczyć aktualny stan.', type: 'danger', position: 'bottom', floating: true, backgroundColor: themeColors.danger, color: '#fff', style: { borderRadius: 8, marginHorizontal: 12, paddingVertical: 8 } });
+                // rollback UI + show compact error toast
+                try { setChats(prev); } catch (e) { /* ignore */ }
+                showMessage({ message: 'Usuwanie nie powiodło się', description: 'Nie udało się usunąć wybranych czatów — przywrócono listę.', duration: 4000, position: 'bottom', floating: true, backgroundColor: themeColors.danger + 'EE', color: '#fff', style: { alignSelf: 'center', minWidth: 260, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16 } });
             }
         };
         
@@ -396,7 +531,7 @@ const ActiveChatsScreen = () => {
         });
     };
     
-    const renderItem = useCallback(({ item }: { item: Chat }) => {
+    const renderItem = useCallback(({ item, index }: { item: Chat, index: number }) => {
         const admin = item.assignedAdminId ? admins[item.assignedAdminId] : undefined;
         const isSelected = selectedSet.has(item.id);
 
@@ -405,33 +540,83 @@ const ActiveChatsScreen = () => {
                 item={item}
                 themeColors={themeColors}
                 filter={filter}
-                selectionShared={selectionShared}
                 selectionModeRef={selectionModeRef}
+                selectionMode={selectionMode}
                 isSelected={isSelected}
                 onSelect={handleSelect}
                 onDeselect={handleDeselect}
                 assignedAdmin={admin}
+                itemIndex={index}
             />
         );
-    }, [admins, themeColors, filter, selectedSet, selectionShared, handleSelect, handleDeselect]);
+    }, [admins, themeColors, filter, selectedSet, handleSelect, handleDeselect, selectionMode]);
     
     const filteredChats = useMemo(() => {
         if (filter === 'active') return allChats.filter((chat: Chat) => chat.status === 'active');
         if (filter === 'waiting') return allChats.filter((chat: Chat) => chat.status === 'waiting');
         if (filter === 'closed') return allChats.filter((chat: Chat) => chat.status === 'closed');
         
-        const activeAndWaiting = allChats.filter((chat: Chat) => chat.status !== 'closed');
-        const closedChats = allChats.filter((chat: Chat) => chat.status === 'closed');
-        return [...activeAndWaiting, ...closedChats];
+        // For 'all': return entire list (no sorting - avoids O(n log n) computation on every filter switch)
+        return allChats;
     }, [allChats, filter]);
 
     const filters: { key: FilterType, title: string }[] = [{ key: 'all', title: 'Wszystkie' }, { key: 'active', title: 'Aktywne' }, { key: 'waiting', title: 'Oczekujące' }, { key: 'closed', title: 'Zamknięte' }];
 
-    // Filter animation state & prefs
-    const filterIndex = useMemo(() => filters.findIndex(f => f.key === filter), [filter]);
-    const prevFilterIndexRef = useRef<number>(filterIndex);
+    // keep currentPageSV in sync with selected filter and update canScrollSV accordingly
+    useEffect(() => {
+        const idx = Math.max(0, filters.findIndex(f => f.key === filter));
+        currentPageSV.value = idx;
+        const h = pageContentHeights.current[idx] || 0;
+        const cs = h > containerHeightRef.current;
+        canScrollSV.value = cs;
+        setCanScroll(cs);
+    }, [filter]);
+
+    // Deferred filter change to keep UI responsive on Android
+    const handleFilterChange = useCallback((newFilter: FilterType) => {
+        InteractionManager.runAfterInteractions(() => {
+            setFilter(newFilter);
+        });
+    }, []);
+
+    const pagerRef = useRef<PagerView | null>(null);
+    // List refs per page to nudge stuck edge effect when detected
+    // (no page list refs or pager locking here — keep FlatList behavior closer to defaults)
+
+
+    // Memoize filter buttons to avoid re-rendering them on every screen render
+    const FilterButtons = useMemo(() => {
+        return filters.map((f, i) => (
+            <TouchableOpacity key={f.key} onPress={() => { try { pagerRef.current?.setPage(i); } catch (e) {} handleFilterChange(f.key); }} style={[styles.filterButton, filter === f.key && { backgroundColor: themeColors.tint }]}>
+                <Text style={[styles.filterText, { color: filter === f.key ? 'white' : themeColors.textMuted }]}>{f.title}</Text>
+            </TouchableOpacity>
+        ));
+    }, [filter, themeColors.tint, themeColors.textMuted, handleFilterChange]);
+
+    // Create a fresh Gesture instance per page to avoid reusing the same Gesture
+    // (prevent "Handler with tag X already exists" errors).
+    const makeGestureForPage = useCallback((pageIndex: number) => {
+        const isScrollable = pageContentHeights.current[pageIndex] ? pageContentHeights.current[pageIndex] > containerHeightRef.current : false;
+        if (isScrollable) return Gesture.Tap();
+
+        return Gesture.Pan()
+            .activeOffsetY([-8, 8])
+            .failOffsetX([-14, 14])
+            .onUpdate((e) => {
+                if (canScrollSV.value) return;
+                const damped = Math.tanh(e.translationY / 90) * JELLY_MULT;
+                jellyY.value = damped;
+            })
+            .onEnd(() => {
+                try { cancelAnimation(jellyY); } catch (e) {}
+                jellyY.value = withTiming(0, { duration: JELLY_RELEASE_DURATION, easing: Easing.out(Easing.cubic) });
+            });
+    }, []);
+
     const [animationsEnabledLocal, setAnimationsEnabledLocal] = useState(true);
     const [reduceMotionLocal, setReduceMotionLocal] = useState(false);
+
+    // previously moved bounce state is declared earlier
 
     useEffect(() => {
         let mounted = true;
@@ -446,38 +631,35 @@ const ActiveChatsScreen = () => {
         } catch (e) { return () => { mounted = false; removeAnimationListener(onChange); }; }
     }, []);
 
-    useEffect(() => { prevFilterIndexRef.current = filterIndex; }, [filterIndex]);
-
-    // Header opacity driven by selectionShared so header and items animate in sync
-    const defaultHeaderStyle = useAnimatedStyle(() => ({ opacity: 1 - (selectionShared ? selectionShared.value : 0) }));
-    const selectionHeaderStyle = useAnimatedStyle(() => ({ opacity: (selectionShared ? selectionShared.value : 0) }));
-
     return (
-        <TabTransition tabIndex={0} style={{ flex: 1, backgroundColor: themeColors.background }}>
-            <ConfirmationModal
-                visible={!!modalConfig}
+        <TabTransition tabIndex={0} quick={true} style={{ flex: 1, backgroundColor: themeColors.background }}>
+            {modalConfig?.title && modalConfig?.confirmText && (
+              <ConfirmationModal
+                visible={true}
                 onClose={closeModal}
-                title={modalConfig?.title || ''}
-                message={modalConfig?.message || ''}
-                confirmText={modalConfig?.confirmText || ''}
-                cancelText={modalConfig?.cancelText}
-                variant={modalConfig?.variant}
+                title={modalConfig.title}
+                message={modalConfig.message || ''}
+                confirmText={modalConfig.confirmText}
+                cancelText={modalConfig.cancelText}
+                variant={modalConfig.variant}
                 onConfirm={() => {
                     const onConfirmAction = modalConfig?.onConfirm;
                     closeModal();
                     if (onConfirmAction) {
-                        setTimeout(() => { try { onConfirmAction(); } catch (e) { console.error(e); } }, 320);
+                        setTimeout(() => { try { onConfirmAction(); } catch (e) { console.error(e); } }, 160);
                     }
                 }}
-            />
+              />
+            )}
             <View style={styles.headerArea}>
-                 <Animated.View style={[styles.headerWrapper, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
+                 <View style={[styles.headerWrapper, { opacity: !selectionMode ? 1 : 0 }]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
                     <View style={[styles.headerContainer, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
-                        <Text style={[styles.headerTitle, { color: themeColors.text }]}>Livechat</Text>
-                        <Text style={[styles.headerSubtitle, { color: themeColors.textMuted }]}>Witaj, {displayName || 'Użytkowniku'}</Text>
+                                                <Text style={[styles.headerTitle, { color: themeColors.text }]}>Livechat</Text>
+                                                <Text style={[styles.headerSubtitle, { color: themeColors.textMuted }]}>Witaj, {displayName || 'Użytkowniku'}</Text>
+                                                {/* test button removed */}
                     </View>
-                </Animated.View>
-                <Animated.View style={[styles.headerWrapper, selectionHeaderStyle]} pointerEvents={selectionMode ? 'auto' : 'none'}>
+                </View>
+                <View style={[styles.headerWrapper, { opacity: selectionMode ? 1 : 0 }]} pointerEvents={selectionMode ? 'auto' : 'none'}>
                     <View style={[styles.headerContainer, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
                         <TouchableOpacity onPress={exitSelectionMode}><Text style={{ color: themeColors.tint, fontSize: 17, fontWeight: '600' }}>Anuluj</Text></TouchableOpacity>
                         <Text style={[styles.selectionTitle, {color: themeColors.text}]}>{`Zaznaczono: ${selectedChats.length}`}</Text>
@@ -485,55 +667,145 @@ const ActiveChatsScreen = () => {
                             <Ionicons name="trash-outline" size={24} color={selectedChats.length > 0 ? themeColors.danger : themeColors.textMuted} />
                         </TouchableOpacity>
                     </View>
-                </Animated.View>
+                </View>
             </View>
 
             {/* Always render filters to avoid list shifting when entering/exiting selection mode. */}
-            <Animated.View style={[styles.filterOuterContainer, { borderBottomColor: themeColors.border }, useAnimatedStyle(() => ({ opacity: 1 - (selectionShared ? selectionShared.value * 0.15 : 0) }))]} pointerEvents={selectionMode ? 'none' : 'auto'}>
+            <View style={[styles.filterOuterContainer, { borderBottomColor: themeColors.border, opacity: selectionMode ? 0.85 : 1 }]} pointerEvents={selectionMode ? 'none' : 'auto'}>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterContentContainer}>
-                    {filters.map(f => (
-                        <TouchableOpacity key={f.key} onPress={() => setFilter(f.key)} style={[styles.filterButton, filter === f.key && { backgroundColor: themeColors.tint }]}>
-                            <Text style={[styles.filterText, { color: filter === f.key ? 'white' : themeColors.textMuted }]}>{f.title}</Text>
-                        </TouchableOpacity>
-                    ))}
+                    {FilterButtons}
                 </ScrollView>
-            </Animated.View>
+            </View>
 
-            {
-                // animate filter content like a single sheet — direction based on filter index diff
-                (() => {
-                    const shouldAnimate = animationsEnabledLocal && !reduceMotionLocal;
-                    const enterDuration = shouldAnimate ? 50 : 0;
-                    const exitDuration = shouldAnimate ? 40 : 0;
-                    let enterAnim: any = FadeIn.duration(enterDuration);
-                    let exitAnim: any = FadeOut.duration(exitDuration);
-                    if (filterIndex > prevFilterIndexRef.current) {
-                        enterAnim = SlideInRight.duration(enterDuration);
-                        exitAnim = SlideOutLeft.duration(exitDuration);
-                    } else if (filterIndex < prevFilterIndexRef.current) {
-                        enterAnim = SlideInLeft.duration(enterDuration);
-                        exitAnim = SlideOutRight.duration(exitDuration);
-                    }
+            <View style={{ flex: 1 }} onLayout={(e) => { containerHeightRef.current = e.nativeEvent.layout.height; const h = pageContentHeights.current[currentPageSV.value] || 0; const cs = h > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}>
+                {loading && allChats.length === 0 ? (
+                    <ActivityIndicator style={{ flex: 1, justifyContent: 'center' }} />
+                ) : (
+                        <Animated.View style={[{ flex: 1 }, jellyStyle]}>
+                        <PagerView
+                            ref={pagerRef}
+                            style={{ flex: 1 }}
+                            initialPage={currentPageSV.value}
+                            orientation="horizontal"
+                            
+                            onPageSelected={(e) => {
+                                const pos = e.nativeEvent.position;
+                                const k = filters[pos]?.key as FilterType | undefined;
+                                currentPageSV.value = pos;
+                                const h = pageContentHeights.current[pos] || 0;
+                                const cs = h > containerHeightRef.current;
+                                canScrollSV.value = cs;
+                                setCanScroll(cs);
+                                if (k) setFilter(k);
+                            }}
+                        >
+                            {filters.map((f, pageIndex) => {
+                                const pageData = ((): Chat[] => {
+                                    if (f.key === 'active') return allChats.filter((chat: Chat) => chat.status === 'active');
+                                    if (f.key === 'waiting') return allChats.filter((chat: Chat) => chat.status === 'waiting');
+                                    if (f.key === 'closed') return allChats.filter((chat: Chat) => chat.status === 'closed');
+                                    return allChats;
+                                })();
 
-                    return (
-                        <Animated.View key={`filter-${filter}`} entering={enterAnim} exiting={exitAnim} style={{ flex: 1 }}>
-                            {loading && allChats.length === 0 ? (
-                                <ActivityIndicator style={{ flex: 1, justifyContent: 'center' }} />
-                            ) : (
-                                <FlatList<Chat>
-                                    data={filteredChats}
-                                    keyExtractor={(item) => item.id}
-                                    renderItem={renderItem}
-                                    ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
-                                    style={{ backgroundColor: themeColors.background }}
-                                    contentContainerStyle={{ paddingTop: 10 }}
-                                    extraData={selectedChats}
-                                />
-                            )}
+                                return (
+                                    <View key={f.key} style={{ flex: 1 }}>
+                                        { (pageContentHeights.current[pageIndex] ? pageContentHeights.current[pageIndex] > containerHeightRef.current : false) ? (
+                                            (() => {
+                                                if (!listRefs.current[pageIndex]) listRefs.current[pageIndex] = React.createRef<FlatList>();
+                                                const listRef = listRefs.current[pageIndex];
+                                                return (
+                                                    <GestureDetector gesture={horizontalSwipeGestureForPage(pageIndex)}>
+                                                        <NativeViewGestureHandler simultaneousHandlers={pagerRef as any}>
+                                                            <AnimatedFlatList<Chat>
+                                                                ref={listRef as any}
+                                                                data={pageData}
+                                                                overScrollMode="auto"
+                                                                bounces={false}
+                                                                decelerationRate={0.2}
+                                                                nestedScrollEnabled={true}
+                                                                keyExtractor={(item) => item.id}
+                                                                renderItem={({ item, index }) => (
+                                                                    <ChatListItem
+                                                                        item={item}
+                                                                        themeColors={themeColors}
+                                                                        filter={f.key as FilterType}
+                                                                        selectionModeRef={selectionModeRef}
+                                                                        selectionMode={selectionMode}
+                                                                        isSelected={selectedSet.has(item.id)}
+                                                                        onSelect={handleSelect}
+                                                                        onDeselect={handleDeselect}
+                                                                        assignedAdmin={admins[item.assignedAdminId || '']}
+                                                                        itemIndex={index}
+                                                                    />
+                                                                )}
+                                                                removeClippedSubviews={true}
+                                                                maxToRenderPerBatch={8}
+                                                                initialNumToRender={8}
+                                                                getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
+                                                                windowSize={5}
+                                                                ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
+                                                                style={{ backgroundColor: themeColors.background }}
+                                                                contentContainerStyle={{ paddingTop: 10 }}
+                                                                extraData={selectionMode}
+                                                                onEndReached={() => { if (hasMore) loadMore(); }}
+                                                                onEndReachedThreshold={0.5}
+                                                                ListFooterComponent={isLoadingMore ? (<ActivityIndicator style={{ marginVertical: 12 }} />) : null}
+                                                                scrollEnabled={true}
+                                                                onScroll={(ev) => { listOffsets.current[pageIndex] = ev.nativeEvent.contentOffset.y; }}
+                                                                scrollEventThrottle={16}
+                                                                onContentSizeChange={(_, h) => { pageContentHeights.current[pageIndex] = h; if (currentPageSV.value === pageIndex) { const cs = h > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); } }}
+                                                            />
+                                                        </NativeViewGestureHandler>
+                                                    </GestureDetector>
+                                                );
+                                            })()
+                                        ) : (
+                                            <GestureDetector gesture={makeGestureForPage(pageIndex)}>
+                                                <AnimatedFlatList<Chat>
+                                                    data={pageData}
+                                                    overScrollMode="auto"
+                                                    bounces={false}
+                                                    decelerationRate={0.2}
+                                                    nestedScrollEnabled={true}
+                                                    keyExtractor={(item) => item.id}
+                                                    renderItem={({ item, index }) => (
+                                                        <ChatListItem
+                                                            item={item}
+                                                            themeColors={themeColors}
+                                                            filter={f.key as FilterType}
+                                                            selectionModeRef={selectionModeRef}
+                                                            selectionMode={selectionMode}
+                                                            isSelected={selectedSet.has(item.id)}
+                                                            onSelect={handleSelect}
+                                                            onDeselect={handleDeselect}
+                                                            assignedAdmin={admins[item.assignedAdminId || '']}
+                                                            itemIndex={index}
+                                                        />
+                                                    )}
+                                                    removeClippedSubviews={true}
+                                                    maxToRenderPerBatch={8}
+                                                    initialNumToRender={8}
+                                                    getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
+                                                    windowSize={5}
+                                                    ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
+                                                    style={{ backgroundColor: themeColors.background }}
+                                                    contentContainerStyle={{ paddingTop: 10 }}
+                                                    extraData={selectionMode}
+                                                    onEndReached={() => { if (hasMore) loadMore(); }}
+                                                    onEndReachedThreshold={0.5}
+                                                    ListFooterComponent={isLoadingMore ? (<ActivityIndicator style={{ marginVertical: 12 }} />) : null}
+                                                    scrollEnabled={false}
+                                                    onContentSizeChange={(_, h) => { pageContentHeights.current[pageIndex] = h; if (currentPageSV.value === pageIndex) { const cs = h > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); } }}
+                                                />
+                                            </GestureDetector>
+                                        )}
+                                    </View>
+                                );
+                            })}
+                        </PagerView>
                         </Animated.View>
-                    );
-                })()
-            }
+                )}
+            </View>
 
         </TabTransition>
     );

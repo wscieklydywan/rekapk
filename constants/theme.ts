@@ -13,6 +13,7 @@ export const Colors = {
     success: '#4CAF50',
     secondary: '#2C2C2E',
     icon: '#8E8E93',
+    selection: 'rgba(52, 120, 246, 0.1)',
   },
   dark: {
     text: '#fff',
@@ -27,5 +28,6 @@ export const Colors = {
     success: '#66BB6A',
     secondary: '#5A5A5A',
     icon: '#8E8E93',
+    selection: 'rgba(52, 120, 246, 0.15)',
   },
 };

@@ -8,7 +8,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useSegments } from 'expo-router';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, useColorScheme } from 'react-native';
+import { Platform, View, useColorScheme } from 'react-native';
+
+// Helper exported for unit testing: suppress notifications that occur
+// within `thresholdMs` after a navigation/segments change.
+export function shouldShowToastAfterSegmentChange(lastSegmentsChangeMs: number, nowMs = Date.now(), thresholdMs = 300) {
+  return nowMs - (lastSegmentsChangeMs || 0) >= thresholdMs;
+}
 
 interface FormContextType {
   forms: ContactForm[];
@@ -35,6 +41,15 @@ export const FormProvider: React.FC<{children: React.ReactNode}> = ({ children }
   const theme = useColorScheme() ?? 'light';
   const themeColors = Colors[theme];
   const isInitialLoad = useRef(true);
+  // Timestamp of the last navigation/segment change — used to suppress
+  // transient notifications that are caused by rapid navigation (the
+  // reproduction you reported: spam `enter`/`back` causing a fake toast).
+  const lastSegmentsChangeRef = useRef<number>(0);
+
+  // Update the last-segments-change timestamp whenever the router segments change.
+  useEffect(() => {
+    lastSegmentsChangeRef.current = Date.now();
+  }, [segments]);
 
   useEffect(() => {
     if (!user) {
@@ -62,28 +77,49 @@ export const FormProvider: React.FC<{children: React.ReactNode}> = ({ children }
       snapshot.docChanges().forEach(change => {
         if (change.type === 'added' && !change.doc.metadata.hasPendingWrites) {
           if (!onFormsScreen && !onSpecificFormScreen) {
+              // Suppress toasts that happen immediately after a navigation change —
+              // these are the "ghost" notifications you reported when spamming
+              // enter/back. Allow only when segments have been stable for >= 300ms.
+              const now = Date.now();
+              if (!shouldShowToastAfterSegmentChange(lastSegmentsChangeRef.current, now, 300)) {
+                if ((global as any).__DEV__) console.debug('FormProvider: suppressed transient form toast due to recent navigation');
+                return; // skip this change
+              }
+
               const newFormData = change.doc.data();
               showMessage({
                 message: "Nowy Formularz",
                 description: `Od: ${newFormData.userInfo.contact}`,
-                duration: 4000,
-                onPress: () => router.push((`/forms/${change.doc.id}`) as any),
+                duration: 5000,
+                onPress: () => { router.push((`/forms/${change.doc.id}`) as any); },
                 floating: true,
                 hideOnPress: true,
-                style: { backgroundColor: theme === 'light' ? '#EFEFF4' : '#2C2C2E', borderRadius: 16, marginTop: Platform.OS === 'ios' ? 20 : 10, marginHorizontal: 8, ...Platform.select({ ios: { shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8 }, android: { elevation: 10 } }) },
-                titleStyle: { fontWeight: 'bold', fontSize: 16, color: themeColors.text },
-                icon: () => <Ionicons name="document-text-outline" size={28} color={themeColors.tint} style={{ marginRight: 15, marginLeft: 5 }} />,
+                chatId: change.doc.id,
+                style: {
+                  backgroundColor: theme === 'light' ? 'rgba(242, 242, 247, 0.97)' : 'rgba(28, 28, 30, 0.97)',
+                  borderRadius: 20,
+                  marginTop: Platform.OS === 'ios' ? 40 : 20,
+                  marginHorizontal: 10,
+                  paddingVertical: 10,
+                  paddingHorizontal: 5,
+                  ...Platform.select({
+                    ios: { shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 6 },
+                    android: { elevation: 8 }
+                  })
+                },
+                titleStyle: { fontWeight: 'bold', fontSize: 15, color: themeColors.text, marginLeft: 5 },
+                textStyle: { fontSize: 13, color: themeColors.textMuted, marginLeft: 5, marginTop: 2 },
+                icon: () => (
+                  <View style={{ justifyContent: 'center', height: '100%', marginLeft: 12, marginRight: 8 }}>
+                    <Ionicons name="mail-outline" size={28} color={themeColors.tint} />
+                  </View>
+                ),
               });
+              setLoading(false);
           }
         }
       });
 
-      setForms(newForms);
-      if (loading) setLoading(false);
-
-    }, (error) => {
-      console.error("Błąd w FormProvider: ", error);
-      setLoading(false);
     });
 
     return () => {

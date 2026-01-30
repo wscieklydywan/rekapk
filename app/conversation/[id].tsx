@@ -4,13 +4,14 @@ import { useChatContext } from '@/app/contexts/ChatProvider';
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/useAuth';
 import { db } from '@/lib/firebase';
+import { deleteCollectionInBatches } from '@/lib/firestore-utils';
 import { Chat, Message, User } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
-import { collection, doc, getDoc, getDocs, increment, limit, onSnapshot, orderBy, query, startAfter, Timestamp, updateDoc, writeBatch } from 'firebase/firestore';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { collection, deleteDoc, doc, getDoc, getDocs, increment, limit, onSnapshot, orderBy, query, runTransaction, startAfter, Timestamp, updateDoc, writeBatch } from 'firebase/firestore';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, BackHandler, FlatList, KeyboardAvoidingView, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, AppState, FlatList, KeyboardAvoidingView, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AnimatedModal from '@/components/AnimatedModal';
@@ -20,7 +21,8 @@ import { showMessage } from '@/lib/showMessage';
 import { Menu, MenuOption, MenuOptions, MenuProvider, MenuTrigger } from 'react-native-popup-menu';
 
 const GROUP_THRESHOLD_MINUTES = 3;
-const MESSAGES_LIMIT = 50; // number of messages to keep in live subscription
+const MESSAGES_LIMIT = 30; // max number of messages to keep in live subscription and persisted to AsyncStorage
+const MESSAGES_PAGE_SIZE = 20; // number of messages to load per pagination request (older messages)
 // Dev-only: enable verbose message subscription logging when running in dev
 const DEV_MSG_LOGGING = (global as any).__DEV__ || process.env.NODE_ENV === 'development';
 
@@ -56,6 +58,15 @@ const getInMemoryCache = (chatId: string) => {
 
 const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins, showAdminTag, onRetry, index, activeMessageId, activeMessageIndex, onToggleActive, showTimeSeparator, separatorLabel, listInverted }: { message: Message; prevMessage?: Message; nextMessage?: Message; themeColors: any; admins: { [key: string]: User }, showAdminTag?: boolean, onRetry?: (m: Message) => void, index: number, activeMessageId: string | null, activeMessageIndex: number | null, onToggleActive: (id: string | null, idx?: number) => void, showTimeSeparator?: boolean, separatorLabel?: string | null, listInverted?: boolean }) => {
     const isMyMessage = message.sender === 'admin';
+
+    const PERF_DEBUG = !!(global as any).__PERF_DEBUG__ || false;
+    const _mbRenderStart = useRef<number | null>(null);
+    if (PERF_DEBUG) _mbRenderStart.current = Date.now();
+    useEffect(() => {
+        if (!PERF_DEBUG) return;
+        const d = Date.now() - (_mbRenderStart.current || 0);
+        if (d > 8) console.warn(`[perf][MessageBubble] ${message.id} render ${d}ms`);
+    });
 
     if (message.sender === 'system') {
         const lowerCaseText = message.text.toLowerCase();
@@ -286,7 +297,6 @@ const MemoMessageBubble = React.memo(MessageBubble, (prevProps, nextProps) => {
 const ConversationScreen = () => {
     const { user } = useAuth();
     const router = useRouter();
-    const navigation = useNavigation();
     const { id: chatId, status: initialStatus, contactName: encodedContactName } = useLocalSearchParams<{ id: string; status?: Chat['status'], contactName?: string }>();
     const theme = useColorScheme() ?? 'light';
     const themeColors = Colors[theme];
@@ -304,6 +314,7 @@ const ConversationScreen = () => {
     const lastVisibleTimestampRef = useRef<number | null>(null);
     const firstSnapshotRef = useRef(true);
     const firstSnapshotAppliedRef = useRef(false);
+    const chatFirstSnapshotRef = useRef(true);
 
     const combinedMessages = useMemo(() => {
         // Deduplicate messages by id to avoid duplicate keys in lists (e.g., same message present in live and older arrays)
@@ -324,30 +335,26 @@ const ConversationScreen = () => {
     }, [liveMessages, olderMessages]);
     // Per new mount rule: render-only on first frame — loading must be false immediately
     const [loading, setLoading] = useState(false);
+    const [deferredReady, setDeferredReady] = useState(false);
+    const deferredRafRef = useRef<number | null>(null);
 
-
-    // Presence cooldown guard (ms) and last-sent timestamp
-    const PRESENCE_COOLDOWN_MS = 1000;
-    const presenceLastSentAtRef = useRef<number | null>(null);
+    // Diagnostic: mark navigation completion for the `openChat` timer started by the list press
+    useEffect(() => { try { console.timeEnd('openChat'); } catch (e) { /* ignore */ } }, []);
 
     // Presence helpers (synchronous-feel): optimistic local update + immediate server fire-and-forget
     const goOnlineImmediate = async (chatIdParam: string, adminIdParam: string) => {
         try {
             const chatDocRef = doc(db, 'chats', chatIdParam);
-            const docSnap = await getDoc(chatDocRef);
-            if (!docSnap.exists()) {
-                console.warn('Chat does not exist (goOnlineImmediate)');
-                router.back();
+            // Attempt to set active admin without reading first (fewer reads; if the chat doesn't exist updateDoc will throw)
+            try {
+                await updateDoc(chatDocRef, { activeAdminId: adminIdParam });
+            } catch (e) {
+                console.warn('goOnlineImmediate update failed (possibly missing chat):', e);
+                try { router.back(); } catch {}
                 return;
             }
-            const chatData = docSnap.data() as Chat;
-            if (chatData.activeAdminId !== adminIdParam) {
-                // fire-and-forget update
-                try { await updateDoc(chatDocRef, { activeAdminId: adminIdParam }); } catch(e) { console.error('goOnlineImmediate updateDoc failed', e); }
-            }
-            if (chatData.adminUnread > 0) {
-                try { await updateDoc(chatDocRef, { adminUnread: 0, lastPushAt: null }); } catch(e) { console.error('goOnlineImmediate clear unread failed', e); }
-            }
+            // Reset unread and lastPushAt unconditionally to avoid an extra read
+            try { await updateDoc(chatDocRef, { adminUnread: 0, lastPushAt: null }); } catch(e) { console.error('goOnlineImmediate clear unread failed', e); }
         } catch (error) {
             console.error('Error in goOnlineImmediate:', error);
         }
@@ -355,21 +362,17 @@ const ConversationScreen = () => {
 
     const goOfflineImmediate = async (chatIdParam: string, adminIdParam: string) => {
         try {
-            // Optimistic local update for instant UI feedback
-            setChat(prev => prev && prev.id === chatIdParam && prev.activeAdminId === adminIdParam ? { ...prev, activeAdminId: null, lastActivity: Timestamp.now() } : prev);
-
-            // cooldown guard to avoid spamming writes
-            const now = Date.now();
-            if (presenceLastSentAtRef.current && now - presenceLastSentAtRef.current < PRESENCE_COOLDOWN_MS) return;
-            presenceLastSentAtRef.current = now;
-
             const chatDocRef = doc(db, 'chats', chatIdParam);
-            const docSnap = await getDoc(chatDocRef);
-            if (docSnap.exists() && docSnap.data().activeAdminId === adminIdParam) {
-                try { await updateDoc(chatDocRef, { activeAdminId: null, lastActivity: Timestamp.now() }); } catch(e) { console.error('goOfflineImmediate updateDoc failed', e); }
-            }
+            await runTransaction(db, async (tx) => {
+                const docSnap = await tx.get(chatDocRef);
+                if (!docSnap.exists()) return;
+                const data: any = docSnap.data();
+                if (data.activeAdminId === adminIdParam) {
+                    tx.update(chatDocRef, { activeAdminId: null });
+                }
+            });
         } catch (error) {
-            console.error('Error in goOfflineImmediate:', error);
+            console.error('Error in goOfflineImmediate (transaction):', error);
         }
     };
 
@@ -386,29 +389,6 @@ const ConversationScreen = () => {
         return () => {
             (async () => { await goOfflineImmediate(chatId, adminId); })();
         };
-    }, [chatId, user]);
-
-    // If navigation away begins (back swipe/hardware button), immediately notify server we're offline so presence updates before animation completes
-    useEffect(() => {
-        if (!navigation || !chatId || !user) return;
-        const handler = () => {
-            // fire-and-forget: we don't block navigation
-            (async () => { await goOfflineImmediate(chatId, user.uid); })();
-        };
-        const unsub = navigation.addListener('beforeRemove', handler);
-        return () => { try { unsub(); } catch (e) {} };
-    }, [navigation, chatId, user]);
-
-    // Android hardware back: ensure presence is notified immediately before default back behavior
-    useEffect(() => {
-        if (Platform.OS !== 'android' || !chatId || !user) return;
-        const onHardwareBack = () => {
-            (async () => { await goOfflineImmediate(chatId, user.uid); })();
-            // return false so default back behavior proceeds
-            return false;
-        };
-        BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
-        return () => { BackHandler.removeEventListener('hardwareBackPress', onHardwareBack); };
     }, [chatId, user]);
 
     const [modalConfig, setModalConfig] = useState<{ title: string; message: string; confirmText: string; onConfirm: () => void; cancelText?: string; variant?: 'destructive' | 'secondary'; } | null>(null);
@@ -438,11 +418,23 @@ const ConversationScreen = () => {
         }
     };
 
-
+    // Schedule deferred side-effects on next animation frame (this keeps mount free of writes/subscriptions)
+    useEffect(() => {
+        if (!chatId || !user) return;
+        // schedule a single rAF to mark deferred work as ready
+        deferredRafRef.current = requestAnimationFrame(() => {
+            setDeferredReady(true);
+            deferredRafRef.current = null;
+        });
+        return () => {
+            if (deferredRafRef.current) cancelAnimationFrame(deferredRafRef.current);
+            deferredRafRef.current = null;
+        };
+    }, [chatId, user]);
 
     // When deferredReady becomes true, perform all writes, initial fetches and subscriptions.
     useEffect(() => {
-        if (!chatId || !user) return;
+        if (!deferredReady || !chatId || !user) return;
 
         let unsubChat: (() => void) | null = null;
         let unsubMessages: (() => void) | null = null;
@@ -452,60 +444,47 @@ const ConversationScreen = () => {
         const chatDocRef = doc(db, 'chats', chatId);
         const adminId = user.uid;
 
-        // initial heavy load (writes that change chat status, messages waiting->active etc.)
-        const handleInitialLoad = async () => {
-            try {
-                const docSnap = await getDoc(chatDocRef);
-                if (!docSnap.exists()) {
-                    if (!cancelled) {
-                        if (user) { (async () => { await goOfflineImmediate(chatId, user.uid); })(); }
-                        router.back();
-                    }
-                    return;
-                }
-                const chatData = { id: docSnap.id, ...docSnap.data() } as Chat;
-                if (chatData.status === 'waiting') {
-                    const systemMessageText = "Konsultant dołączył do rozmowy!";
-                    const updates = {
-                        status: "active",
-                        operatorId: adminId,
-                        assignedAdminId: adminId,
-                        operatorJoinedAt: Timestamp.now(),
-                        lastMessage: systemMessageText,
-                        lastMessageSender: 'system',
-                        lastMessageTimestamp: Timestamp.now(),
-                        lastActivity: Timestamp.now(),
-                    };
-                    const batch = writeBatch(db);
-                    batch.update(chatDocRef, updates);
-                    const messagesCol = collection(db, 'chats', chatId, 'messages');
-                    batch.delete(doc(messagesCol, 'waiting_message'));
-                    batch.set(doc(collection(db, 'chats', chatId, 'messages')), { text: systemMessageText, sender: "system", createdAt: Timestamp.now() });
-                    await batch.commit();
-                }
-            } catch (error) {
-                console.error("Błąd podczas ładowania czatu:", error);
-                if (!cancelled) {
-                    if (user) { (async () => { await goOfflineImmediate(chatId, user.uid); })(); }
-                    router.back();
-                }
-            }
-        };
+        // initial heavy load is now handled on the first chat onSnapshot to avoid redundant getDoc calls and duplicate execution
 
-        handleInitialLoad();
-
-        handleInitialLoad();
 
         // subscribe to chat doc
         unsubChat = onSnapshot(chatDocRef, (docSnap) => {
             if (cancelled) return;
             if (docSnap.exists()) {
                 setChat({ id: docSnap.id, ...docSnap.data() } as Chat);
-            } else {
-                if (!cancelled) {
-                    if (user) { (async () => { await goOfflineImmediate(chatId, user.uid); })(); }
-                    router.back();
+
+                // Run initial status->active updates once on the first chat snapshot instead of a separate getDoc
+                if (chatFirstSnapshotRef.current) {
+                    chatFirstSnapshotRef.current = false;
+                    try {
+                        const chatData = { id: docSnap.id, ...docSnap.data() } as Chat;
+                        if (chatData.status === 'waiting') {
+                            const systemMessageText = "Konsultant dołączył do rozmowy!";
+                            const updates = {
+                                status: "active",
+                                operatorId: adminId,
+                                assignedAdminId: adminId,
+                                operatorJoinedAt: Timestamp.now(),
+                                lastMessage: systemMessageText,
+                                lastMessageSender: 'system',
+                                lastMessageTimestamp: Timestamp.now(),
+                                lastActivity: Timestamp.now(),
+                            };
+                            const batch = writeBatch(db);
+                            batch.update(chatDocRef, updates);
+                            const messagesCol = collection(db, 'chats', chatId, 'messages');
+                            batch.delete(doc(messagesCol, 'waiting_message'));
+                            batch.set(doc(collection(db, 'chats', chatId, 'messages')), { text: systemMessageText, sender: "system", createdAt: Timestamp.now() });
+                            batch.commit().catch(e => console.error("Initial chat snapshot commit failed:", e));
+                        }
+                    } catch (error) {
+                        console.error("Błąd podczas przetwarzania początkowego snapshotu czatu:", error);
+                        if (!cancelled) router.back();
+                    }
                 }
+
+            } else {
+                if (!cancelled) router.back();
             }
         });
 
@@ -520,7 +499,8 @@ const ConversationScreen = () => {
                 const msgs = docs
                     .map(doc => ({ ...doc.data(), id: doc.id } as Message))
                     .filter(m => {
-                        const hasText = !!(m.text && String(m.text).trim().length > 0);
+                        const trimmed = m.text ? String(m.text).trim() : '';
+                        const hasText = !!trimmed;
                         if (!hasText) {
                             try { console.warn('[chat] Skipping empty initial message', { chatId, id: m.id, sender: m.sender, raw: m }); } catch (e) {}
                         }
@@ -566,7 +546,8 @@ const ConversationScreen = () => {
 
                     if (change.type === 'added') {
                         // ignore empty messages
-                        if (!docData.text || String(docData.text).trim().length === 0) {
+                        const trimmed = docData.text ? String(docData.text).trim() : '';
+                        if (!trimmed) {
                             try { console.warn('[chat] Skipping empty added message', { chatId, id: docData.id || change.doc.id, sender: docData.sender, raw: docData }); } catch (e) {}
                             continue;
                         }
@@ -643,7 +624,7 @@ const ConversationScreen = () => {
             // presence is handled separately (optimistic local + immediate server calls in presence effect)
         };
 
-    }, [chatId, user, router]);
+    }, [deferredReady, chatId, user, router]);
 
     const closeModal = () => {
         // On web, perform a double-blur and focus on body so Chrome doesn't restore focus outline
@@ -686,10 +667,25 @@ const ConversationScreen = () => {
                 const delay = Math.max(until - now + 60, 420);
                 if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
                 modalTimerRef.current = window.setTimeout(() => {
+                    const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+                    const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+                    if ((global as any).__DEV__ && hadEmptyString) {
+                        console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                        console.warn(new Error().stack);
+                    }
+                    const normalized = {
+                        title: safe(config?.title),
+                        message: safe(config?.message),
+                        confirmText: safe(config?.confirmText) ?? 'OK',
+                        cancelText: safe(config?.cancelText),
+                        onConfirm: config?.onConfirm,
+                        variant: config?.variant,
+                    } as any;
+
                     if (modalLockRef.current) {
-                        modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                        modalTimerRef.current = window.setTimeout(() => { setModalConfig(normalized); modalTimerRef.current = null; }, 420);
                     } else {
-                        setModalConfig(config as any);
+                        setModalConfig(normalized);
                         modalTimerRef.current = null;
                     }
                 }, delay);
@@ -703,9 +699,14 @@ const ConversationScreen = () => {
                     if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
                     modalTimerRef.current = window.setTimeout(() => {
                         if (modalLockRef.current) {
-                            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+                            modalTimerRef.current = window.setTimeout(() => {
+                                const normalized = { title: config.title ?? '', message: config.message ?? '', confirmText: config.confirmText ?? 'OK', cancelText: config.cancelText, onConfirm: config.onConfirm, variant: config.variant } as any;
+                                setModalConfig(normalized);
+                                modalTimerRef.current = null;
+                            }, 420);
                         } else {
-                            setModalConfig(config as any);
+                            const normalized = { title: config.title ?? '', message: config.message ?? '', confirmText: config.confirmText ?? 'OK', cancelText: config.cancelText, onConfirm: config.onConfirm, variant: config.variant } as any;
+                            setModalConfig(normalized);
                             modalTimerRef.current = null;
                         }
                     }, delay);
@@ -716,9 +717,26 @@ const ConversationScreen = () => {
 
         if (modalLockRef.current) {
             if (modalTimerRef.current) { clearTimeout(modalTimerRef.current); modalTimerRef.current = null; }
-            modalTimerRef.current = window.setTimeout(() => { setModalConfig(config as any); modalTimerRef.current = null; }, 420);
+            modalTimerRef.current = window.setTimeout(() => {
+                const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+                const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+                if ((global as any).__DEV__ && hadEmptyString) {
+                    console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                    console.warn(new Error().stack);
+                }
+                const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
+                setModalConfig(normalized);
+                modalTimerRef.current = null;
+            }, 420);
         } else {
-            setModalConfig(config as any);
+            const safe = (v?: string) => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+            const hadEmptyString = (config && ((config.title === '') || (config.message === '') || (config.confirmText === '')));
+            if ((global as any).__DEV__ && hadEmptyString) {
+                console.warn('showModal called with empty-string fields — normalizing to avoid blank modal', { original: config });
+                console.warn(new Error().stack);
+            }
+            const normalized = { title: safe(config?.title), message: safe(config?.message), confirmText: safe(config?.confirmText) ?? 'OK', cancelText: safe(config?.cancelText), onConfirm: config?.onConfirm, variant: config?.variant } as any;
+            setModalConfig(normalized);
         }
     };
 
@@ -856,6 +874,9 @@ const ConversationScreen = () => {
             const prev = index < combinedMessages.length - 1 ? combinedMessages[index + 1] : undefined;
             const next = index > 0 ? combinedMessages[index - 1] : undefined;
 
+            // Cache trimmed text check to avoid repeated trim() calls
+            const itemHasText = item.text ? String(item.text).trim().length > 0 : false;
+
             let showAdminTag = false;
             if (item.sender === 'admin') {
                 let foundPrevAdmin = false;
@@ -879,13 +900,13 @@ const ConversationScreen = () => {
             try {
                 // Only compute a separator when we actually have two non-system messages with text
                 // Find the closest older message anywhere in `combinedMessages` (more robust than only checking prev/next)
-                if (item.createdAt && item.text && String(item.text).trim().length > 0 && item.sender !== 'system') {
+                if (item.createdAt && itemHasText && item.sender !== 'system') {
                     const itemMs = item.createdAt.toMillis();
                     let closestOlderMs = -Infinity;
                     let closestOlder: Message | undefined = undefined;
                     for (const c of combinedMessages) {
                         if (!c || !c.createdAt || !c.text) continue;
-                        if (String(c.text).trim().length === 0) continue;
+                        if (!String(c.text).trim()) continue;
                         if (c.sender === 'system') continue;
                         const cMs = c.createdAt.toMillis();
                         if (cMs < itemMs && cMs > closestOlderMs) {
@@ -1015,17 +1036,17 @@ const ConversationScreen = () => {
                 setLoadingMore(false);
                 return;
             }
-            const olderQuery = query(collection(db, 'chats', chatId, 'messages'), orderBy('createdAt', 'desc'), startAfter(startAfterArg), limit(MESSAGES_LIMIT));
+            const olderQuery = query(collection(db, 'chats', chatId, 'messages'), orderBy('createdAt', 'desc'), startAfter(startAfterArg), limit(MESSAGES_PAGE_SIZE));
             const snap = await getDocs(olderQuery);
             if (snap.empty) {
                 setHasMoreOlder(false);
             } else {
                 const docs = snap.docs;
-                const older = docs.map(doc => ({ ...doc.data(), id: doc.id } as Message)).filter(m => !!(m.text && String(m.text).trim().length > 0));
+                const older = docs.map(doc => ({ ...doc.data(), id: doc.id } as Message)).filter(m => m.text && String(m.text).trim());
                 setOlderMessages(prev => [...prev, ...older]);
                 lastVisibleDocRef.current = docs[docs.length - 1];
                 lastVisibleTimestampRef.current = (docs[docs.length - 1].data() as any).createdAt?.toMillis?.();
-                setHasMoreOlder(docs.length === MESSAGES_LIMIT);
+                setHasMoreOlder(docs.length === MESSAGES_PAGE_SIZE);
             }
         } catch (error) {
             console.error('Error loading older messages:', error);
@@ -1042,7 +1063,7 @@ const ConversationScreen = () => {
         }
     }, [totalUnreadCount, chat]);
 
-    // Side-effects now run immediately on mount (no rAF) — cache changes retained
+    // Deferred effect moved above: see `deferredReady` handler (mount must be render-only)
 
 
 
@@ -1289,17 +1310,15 @@ const ConversationScreen = () => {
             // clear in-memory cache for this chat to avoid stale data
             try { inMemoryMessageCache.delete(chatId); } catch (e) { /* ignore */ }
 
-            const batch = writeBatch(db);
-            const messagesRef = collection(db, 'chats', chatId, 'messages');
-            const messagesSnapshot = await getDocs(messagesRef);
-            messagesSnapshot.forEach(messageDoc => batch.delete(messageDoc.ref));
-            batch.delete(doc(db, 'chats', chatId));
-            await batch.commit();
+            // delete messages in safe batches (prevents exceeding Firestore batch limit)
+            await deleteCollectionInBatches(db, collection(db, 'chats', chatId, 'messages'));
+            // remove chat document itself
+            await deleteDoc(doc(db, 'chats', chatId));
             // show a subtle green bar from the bottom to confirm deletion
             showMessage({ message: 'Czat usunięty', description: 'Czat został trwale usunięty', type: 'success', position: 'bottom', floating: true, backgroundColor: themeColors.success, color: '#fff', style: { borderRadius: 8, marginHorizontal: 12, paddingVertical: 8 } });
         } catch (error) {
             console.error('Błąd podczas usuwania czatu:', error);
-            showMessage({ message: 'Błąd', description: 'Nie udało się usunąć czatu. Spróbuj ponownie.', type: 'danger', position: 'bottom', floating: true, backgroundColor: themeColors.danger, color: '#fff', style: { borderRadius: 8, marginHorizontal: 12, paddingVertical: 8 } });
+            showMessage({ message: 'Usuwanie nie powiodło się', description: 'Nie udało się usunąć czatu — spróbuj ponownie.', duration: 4000, position: 'bottom', floating: true, backgroundColor: themeColors.danger + 'EE', color: '#fff', style: { alignSelf: 'center', minWidth: 260, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16 } });
         }
     };    
     const isChatInitiallyClosed = currentStatus === 'closed';
@@ -1308,16 +1327,17 @@ const ConversationScreen = () => {
     return (
         <MenuProvider>
             <SafeAreaView style={[styles.container, { backgroundColor: themeColors.background }]}>
-                <TabTransition quick={true} style={{ flex: 1 }}>
+                <TabTransition noAnimation={true} style={{ flex: 1 }}>
 
-                <ConfirmationModal
-                    visible={!!modalConfig}
+                {modalConfig?.title && modalConfig?.confirmText && (
+                  <ConfirmationModal
+                    visible={true}
                     onClose={closeModal}
-                    title={modalConfig?.title || ''}
-                    message={modalConfig?.message || ''}
-                    confirmText={modalConfig?.confirmText || ''}
-                    cancelText={modalConfig?.cancelText}
-                    variant={modalConfig?.variant}
+                    title={modalConfig.title}
+                    message={modalConfig.message || ''}
+                    confirmText={modalConfig.confirmText}
+                    cancelText={modalConfig.cancelText}
+                    variant={modalConfig.variant}
                     onConfirm={() => {
                         // capture the action now, then close and run it after animation finishes
                         const onConfirmAction = modalConfig?.onConfirm;
@@ -1325,10 +1345,11 @@ const ConversationScreen = () => {
                         if (onConfirmAction) {
                             setTimeout(() => {
                                 try { onConfirmAction(); } catch (e) { console.error(e); }
-                            }, 320);
+                            }, 160);
                         }
                     }}
-                />
+                  />
+                )}
                 
                 <AnimatedModal visible={isAssignModalVisible} onClose={() => setAssignModalVisible(false)} contentStyle={[styles.confirmModal, styles.shadow]}>
                     <Text style={[styles.modalTitle, { color: themeColors.text }]}>Przypisz do admina</Text>
@@ -1379,7 +1400,7 @@ const ConversationScreen = () => {
                 </AnimatedModal>
 
                 <View style={[styles.header, { borderBottomColor: themeColors.border }]}>
-                    <TouchableOpacity onPress={() => { if (user) { (async () => { await goOfflineImmediate(chatId, user.uid); })(); } router.back(); }} style={styles.headerIcon}>
+                    <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon}>
                         <Ionicons name="arrow-back" size={24} color={themeColors.text} />
                         {showBackButtonBadge && <View style={[styles.backButtonBadge, { backgroundColor: themeColors.danger, borderColor: themeColors.background }]} />}
                     </TouchableOpacity>

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "798299866954",
+    "project_id": "reklamchat-bb1fe",
+    "storage_bucket": "reklamchat-bb1fe.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:798299866954:android:5b36ad97428aade1ff23b3",
+        "android_client_info": {
+          "package_name": "com.wscieklydywan.reklamourapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD5xEfLv2u75o59qrZEX5nxP8lKEgaggxQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,12 +1,14 @@
 
 import { Colors } from '@/constants/theme';
 import { db } from '@/lib/firebase';
+import { deleteCollectionInBatches } from '@/lib/firestore-utils';
+import { showMessage } from '@/lib/showMessage';
 import { ContactForm, FormMessage } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, updateDoc, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, InteractionManager, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 
 import { useFormContext } from '@/app/contexts/FormProvider';
 
@@ -57,34 +59,31 @@ const FormDetailScreen = () => {
 
     useEffect(() => {
         navigation.setOptions({ headerShown: false });
-        const task = InteractionManager.runAfterInteractions(() => {
-            if (!formId) return;
-            
-            const formRef = doc(db, 'contact_forms', formId);
-            const unsubForm = onSnapshot(formRef, async (docSnapshot) => {
-                if (docSnapshot.exists()) {
-                    const formData = { id: docSnapshot.id, ...docSnapshot.data() } as ContactForm;
-                    setForm(formData);
-                    if (formData.adminUnread > 0) {
-                        await updateDoc(formRef, { adminUnread: 0 });
-                    }
-                } else {
-                    if (!isDeleting.current && router.canGoBack()) {
-                        router.back();
-                    }
+
+        if (!formId) return;
+        
+        const formRef = doc(db, 'contact_forms', formId);
+        const unsubForm = onSnapshot(formRef, async (docSnapshot) => {
+            if (docSnapshot.exists()) {
+                const formData = { id: docSnapshot.id, ...docSnapshot.data() } as ContactForm;
+                setForm(formData);
+                if (formData.adminUnread > 0) {
+                    await updateDoc(formRef, { adminUnread: 0 });
                 }
-            });
-
-            const messagesQuery = query(collection(db, 'contact_forms', formId, 'messages'), orderBy('createdAt', 'asc'));
-            const unsubMessages = onSnapshot(messagesQuery, (snapshot) => {
-                setMessages(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as FormMessage)));
-                setLoading(false);
-            });
-
-            return () => { unsubForm(); unsubMessages(); };
+            } else {
+                if (!isDeleting.current && router.canGoBack()) {
+                    router.back();
+                }
+            }
         });
 
-        return () => task.cancel();
+        const messagesQuery = query(collection(db, 'contact_forms', formId, 'messages'), orderBy('createdAt', 'asc'));
+        const unsubMessages = onSnapshot(messagesQuery, (snapshot) => {
+            setMessages(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as FormMessage)));
+            setLoading(false);
+        });
+
+        return () => { unsubForm(); unsubMessages(); };
     }, [formId, navigation]);
 
     const [modalVisible, setModalVisible] = useState(false);
@@ -101,16 +100,12 @@ const FormDetailScreen = () => {
         }
         
         try {
-            const messagesRef = collection(db, 'contact_forms', formId, 'messages');
-            const messagesSnapshot = await getDocs(messagesRef);
-            if (!messagesSnapshot.empty) {
-                const batch = writeBatch(db);
-                messagesSnapshot.docs.forEach(doc => batch.delete(doc.ref));
-                await batch.commit();
-            }
+            await deleteCollectionInBatches(db, collection(db, 'contact_forms', formId, 'messages'));
             await deleteDoc(doc(db, 'contact_forms', formId));
         } catch (error) {
             console.error("Błąd podczas usuwania formularza i jego wiadomości: ", error);
+            isDeleting.current = false;
+            showMessage({ message: 'Usuwanie nie powiodło się', description: 'Nie udało się usunąć formularza — spróbuj ponownie.', duration: 4000, position: 'bottom', floating: true, backgroundColor: themeColors.danger + 'EE', color: '#fff', style: { alignSelf: 'center', minWidth: 260, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16 } });
         }
     };
 
