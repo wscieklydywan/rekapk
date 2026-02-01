@@ -1,4 +1,3 @@
-
 import { hideNotificationForChat } from '@/app/contexts/NotificationContext';
 import { DebugProvider } from '@/contexts/DebugContext';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';

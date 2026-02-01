@@ -24,8 +24,8 @@ var __importStar = (this && this.__importStar) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.notifyAdminsOnNewForm = exports.notifyAdminsOnNewChat = exports.handleNewMessagePush = exports.buildNewChatMessages = void 0;
-const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
+const functions = __importStar(require("firebase-functions"));
 admin.initializeApp();
 const db = admin.firestore();
 // Helper to build push messages for a new chat (exported for tests)

@@ -14,7 +14,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { collection, deleteDoc, doc } from 'firebase/firestore';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, FlatList, InteractionManager, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
-import { Gesture, GestureDetector, NativeViewGestureHandler } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import PagerView from 'react-native-pager-view';
 import Animated, { cancelAnimation, Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
@@ -454,6 +454,7 @@ const ActiveChatsScreen = () => {
     const currentPageSV = useSharedValue(0);
     const canScrollSV = useSharedValue(false);
     const [canScroll, setCanScroll] = useState(false);
+    
 
     const jellyY = useSharedValue(0);
     const JELLY_MULT = 6;
@@ -463,38 +464,10 @@ const ActiveChatsScreen = () => {
         transform: [{ translateY: jellyY.value }]
     }));
 
-    // Refs and offsets per long list to allow cancelling momentum
+    // Refs per long list
     const listRefs = useRef<Record<number, React.RefObject<any>>>({});
-    const listOffsets = useRef<Record<number, number>>({});
 
-    const horizontalSwipeGestureForPage = useCallback((pageIndex: number) => {
-        return Gesture.Pan()
-            // Activate only for clear horizontal moves
-            .activeOffsetX([-12, 12])
-            // small vertical motion shouldn't fail horizontal detection
-            .failOffsetY([-10, 10])
-            .onStart(() => {
-                try {
-                    const ref = listRefs.current[pageIndex];
-                    const off = listOffsets.current[pageIndex] || 0;
-                    if (ref?.current?.scrollToOffset) {
-                        ref.current.scrollToOffset({ offset: off, animated: false });
-                    }
-                } catch (e) { /* ignore */ }
-            })
-            .onEnd((e) => {
-                try {
-                    const dx = e.translationX || 0;
-                    if (Math.abs(dx) > 30) {
-                        const dir = dx < 0 ? 1 : -1; // left -> next page, right -> prev page
-                        const target = Math.max(0, Math.min(filters.length - 1, pageIndex + dir));
-                        if (pagerRef.current && typeof (pagerRef.current as any).setPage === 'function') {
-                            try { (pagerRef.current as any).setPage(target); } catch (e) {}
-                        }
-                    }
-                } catch (e) { /* ignore */ }
-            });
-    }, []);
+    // horizontal swipe between pages removed per request — Pager navigation now only via filter buttons
 
     // NOTE: do NOT reuse a single Gesture instance across multiple GestureDetectors.
     // Create gesture instances per-list inside render to avoid "Handler with tag X already exists".
@@ -681,8 +654,8 @@ const ActiveChatsScreen = () => {
                 {loading && allChats.length === 0 ? (
                     <ActivityIndicator style={{ flex: 1, justifyContent: 'center' }} />
                 ) : (
-                        <Animated.View style={[{ flex: 1 }, jellyStyle]}>
-                        <PagerView
+                    <View style={{ flex: 1 }}>
+                    <PagerView
                             ref={pagerRef}
                             style={{ flex: 1 }}
                             initialPage={currentPageSV.value}
@@ -713,97 +686,93 @@ const ActiveChatsScreen = () => {
                                             (() => {
                                                 if (!listRefs.current[pageIndex]) listRefs.current[pageIndex] = React.createRef<FlatList>();
                                                 const listRef = listRefs.current[pageIndex];
+                                                // Scrollable lists MUST be pure native scroll — no gesture wrappers, no jelly logic.
                                                 return (
-                                                    <GestureDetector gesture={horizontalSwipeGestureForPage(pageIndex)}>
-                                                        <NativeViewGestureHandler simultaneousHandlers={pagerRef as any}>
-                                                            <AnimatedFlatList<Chat>
-                                                                ref={listRef as any}
-                                                                data={pageData}
-                                                                overScrollMode="auto"
-                                                                bounces={false}
-                                                                decelerationRate={0.2}
-                                                                nestedScrollEnabled={true}
-                                                                keyExtractor={(item) => item.id}
-                                                                renderItem={({ item, index }) => (
-                                                                    <ChatListItem
-                                                                        item={item}
-                                                                        themeColors={themeColors}
-                                                                        filter={f.key as FilterType}
-                                                                        selectionModeRef={selectionModeRef}
-                                                                        selectionMode={selectionMode}
-                                                                        isSelected={selectedSet.has(item.id)}
-                                                                        onSelect={handleSelect}
-                                                                        onDeselect={handleDeselect}
-                                                                        assignedAdmin={admins[item.assignedAdminId || '']}
-                                                                        itemIndex={index}
-                                                                    />
-                                                                )}
-                                                                removeClippedSubviews={true}
-                                                                maxToRenderPerBatch={8}
-                                                                initialNumToRender={8}
-                                                                getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
-                                                                windowSize={5}
-                                                                ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
-                                                                style={{ backgroundColor: themeColors.background }}
-                                                                contentContainerStyle={{ paddingTop: 10 }}
-                                                                extraData={selectionMode}
-                                                                onEndReached={() => { if (hasMore) loadMore(); }}
-                                                                onEndReachedThreshold={0.5}
-                                                                ListFooterComponent={isLoadingMore ? (<ActivityIndicator style={{ marginVertical: 12 }} />) : null}
-                                                                scrollEnabled={true}
-                                                                onScroll={(ev) => { listOffsets.current[pageIndex] = ev.nativeEvent.contentOffset.y; }}
-                                                                scrollEventThrottle={16}
-                                                                onContentSizeChange={(_, h) => { pageContentHeights.current[pageIndex] = h; if (currentPageSV.value === pageIndex) { const cs = h > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); } }}
-                                                            />
-                                                        </NativeViewGestureHandler>
-                                                    </GestureDetector>
+                                                    <View style={{ flex: 1 }}>
+                                                        <FlatList<Chat>
+                                                            ref={listRef as any}
+                                                            data={pageData}
+                                                            scrollEnabled={true}
+                                                            decelerationRate="fast"
+                                                            overScrollMode="auto"
+                                                            bounces={true}
+                                                            alwaysBounceVertical={true}
+                                                            keyExtractor={(item) => item.id}
+                                                            renderItem={({ item, index }) => (
+                                                                <ChatListItem
+                                                                    item={item}
+                                                                    themeColors={themeColors}
+                                                                    filter={f.key as FilterType}
+                                                                    selectionModeRef={selectionModeRef}
+                                                                    selectionMode={selectionMode}
+                                                                    isSelected={selectedSet.has(item.id)}
+                                                                    onSelect={handleSelect}
+                                                                    onDeselect={handleDeselect}
+                                                                    assignedAdmin={admins[item.assignedAdminId || '']}
+                                                                    itemIndex={index}
+                                                                />
+                                                            )}
+                                                            getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index + 10, index })}
+                                                            ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
+                                                            ListFooterComponent={isLoadingMore ? (<ActivityIndicator style={{ marginVertical: 12 }} />) : null}
+                                                            style={{ backgroundColor: themeColors.background }}
+                                                            contentContainerStyle={{ paddingTop: 10 }}
+                                                            extraData={selectionMode}
+                                                            onEndReached={() => { if (hasMore) loadMore(); }}
+                                                            onEndReachedThreshold={0.5}
+                                                            onContentSizeChange={(_, h) => { pageContentHeights.current[pageIndex] = h; if (currentPageSV.value === pageIndex) { const cs = h > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); } }}
+                                                            scrollEventThrottle={16}
+                                                        />
+                                                    </View>
                                                 );
                                             })()
                                         ) : (
                                             <GestureDetector gesture={makeGestureForPage(pageIndex)}>
-                                                <AnimatedFlatList<Chat>
-                                                    data={pageData}
-                                                    overScrollMode="auto"
-                                                    bounces={false}
-                                                    decelerationRate={0.2}
-                                                    nestedScrollEnabled={true}
-                                                    keyExtractor={(item) => item.id}
-                                                    renderItem={({ item, index }) => (
-                                                        <ChatListItem
-                                                            item={item}
-                                                            themeColors={themeColors}
-                                                            filter={f.key as FilterType}
-                                                            selectionModeRef={selectionModeRef}
-                                                            selectionMode={selectionMode}
-                                                            isSelected={selectedSet.has(item.id)}
-                                                            onSelect={handleSelect}
-                                                            onDeselect={handleDeselect}
-                                                            assignedAdmin={admins[item.assignedAdminId || '']}
-                                                            itemIndex={index}
-                                                        />
-                                                    )}
-                                                    removeClippedSubviews={true}
-                                                    maxToRenderPerBatch={8}
-                                                    initialNumToRender={8}
-                                                    getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
-                                                    windowSize={5}
-                                                    ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
-                                                    style={{ backgroundColor: themeColors.background }}
-                                                    contentContainerStyle={{ paddingTop: 10 }}
-                                                    extraData={selectionMode}
-                                                    onEndReached={() => { if (hasMore) loadMore(); }}
-                                                    onEndReachedThreshold={0.5}
-                                                    ListFooterComponent={isLoadingMore ? (<ActivityIndicator style={{ marginVertical: 12 }} />) : null}
-                                                    scrollEnabled={false}
-                                                    onContentSizeChange={(_, h) => { pageContentHeights.current[pageIndex] = h; if (currentPageSV.value === pageIndex) { const cs = h > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); } }}
-                                                />
+                                                <Animated.View style={[{ flex: 1 }, jellyStyle]}>
+                                                    <AnimatedFlatList<Chat>
+                                                        data={pageData}
+                                                        overScrollMode="auto"
+                                                        bounces={false}
+                                                        decelerationRate={0.2}
+                                                        nestedScrollEnabled={true}
+                                                        keyExtractor={(item) => item.id}
+                                                        renderItem={({ item, index }) => (
+                                                            <ChatListItem
+                                                                item={item}
+                                                                themeColors={themeColors}
+                                                                filter={f.key as FilterType}
+                                                                selectionModeRef={selectionModeRef}
+                                                                selectionMode={selectionMode}
+                                                                isSelected={selectedSet.has(item.id)}
+                                                                onSelect={handleSelect}
+                                                                onDeselect={handleDeselect}
+                                                                assignedAdmin={admins[item.assignedAdminId || '']}
+                                                                itemIndex={index}
+                                                            />
+                                                        )}
+                                                        removeClippedSubviews={true}
+                                                        maxToRenderPerBatch={8}
+                                                        initialNumToRender={8}
+                                                        getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
+                                                        windowSize={5}
+                                                        ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
+                                                        style={{ backgroundColor: themeColors.background }}
+                                                        contentContainerStyle={{ paddingTop: 10 }}
+                                                        extraData={selectionMode}
+                                                        onEndReached={() => { if (hasMore) loadMore(); }}
+                                                        onEndReachedThreshold={0.5}
+                                                        ListFooterComponent={isLoadingMore ? (<ActivityIndicator style={{ marginVertical: 12 }} />) : null}
+                                                        scrollEnabled={false}
+                                                        onContentSizeChange={(_, h) => { pageContentHeights.current[pageIndex] = h; if (currentPageSV.value === pageIndex) { const cs = h > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); } }}
+                                                    />
+                                                </Animated.View>
                                             </GestureDetector>
                                         )}
                                     </View>
                                 );
                             })}
                         </PagerView>
-                        </Animated.View>
+                        </View>
                 )}
             </View>
 
