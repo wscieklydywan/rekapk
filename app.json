@@ -17,6 +17,7 @@
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png"
       },
+      "softwareKeyboardLayoutMode": "pan",
       "package": "com.wscieklydywan.reklamourapp",
       "permissions": [
         "android.permission.RECORD_AUDIO"

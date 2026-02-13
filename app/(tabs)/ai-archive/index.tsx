@@ -6,14 +6,29 @@ import { Colors } from '@/constants/theme';
 import { useTapHighlight } from '@/hooks/useTapHighlight';
 import { db } from '@/lib/firebase';
 import { deleteCollectionInBatches } from '@/lib/firestore-utils';
-import { showMessage } from '@/lib/showMessage';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRouter } from 'expo-router';
 import { collection, deleteDoc, doc, onSnapshot, orderBy, query } from 'firebase/firestore';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, Pressable, StatusBar, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { cancelAnimation, Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { cancelAnimation, Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+
+// Lighten a hex color by moving it towards white by `amount` (0..1).
+const lightenHex = (hex: string, amount = 0.6) => {
+    try {
+        if (!hex || hex[0] !== '#') return hex;
+        const h = hex.replace('#', '');
+        const r = parseInt(h.substring(0,2), 16);
+        const g = parseInt(h.substring(2,4), 16);
+        const b = parseInt(h.substring(4,6), 16);
+        const nr = Math.round(r + (255 - r) * amount);
+        const ng = Math.round(g + (255 - g) * amount);
+        const nb = Math.round(b + (255 - b) * amount);
+        const toHex = (v: number) => v.toString(16).padStart(2, '0');
+        return `#${toHex(nr)}${toHex(ng)}${toHex(nb)}`;
+    } catch (e) { return hex; }
+};
 
 
 // Typy
@@ -25,8 +40,23 @@ interface AiConversation {
   messageCount: number;
 }
 
-const AiConversationListItem = ({ item, themeColors, selectionMode, isSelected, onSelect, onDeselect }: { item: AiConversation, themeColors: any, selectionMode: boolean, isSelected: boolean, onSelect: (id: string) => void, onDeselect: (id: string) => void }) => {
+const AiConversationListItem = ({ item, themeColors, selectionMode = false, selectionModeRef, selectionModeSV, isSelected, onSelect, onDeselect }: { item: AiConversation, themeColors: any, selectionMode: boolean, selectionModeRef?: React.MutableRefObject<boolean>, selectionModeSV?: Animated.SharedValue<number>, isSelected: boolean, onSelect: (id: string) => void, onDeselect: (id: string) => void }) => {
     const router = useRouter();
+    // Lighten a hex color by moving it towards white by `amount` (0..1).
+    const lightenHex = (hex: string, amount = 0.6) => {
+        try {
+            if (!hex || hex[0] !== '#') return hex;
+            const h = hex.replace('#', '');
+            const r = parseInt(h.substring(0,2), 16);
+            const g = parseInt(h.substring(2,4), 16);
+            const b = parseInt(h.substring(4,6), 16);
+            const nr = Math.round(r + (255 - r) * amount);
+            const ng = Math.round(g + (255 - g) * amount);
+            const nb = Math.round(b + (255 - b) * amount);
+            const toHex = (v: number) => v.toString(16).padStart(2, '0');
+            return `#${toHex(nr)}${toHex(ng)}${toHex(nb)}`;
+        } catch (e) { return hex; }
+    };
     // Wyświetlamy datę ostatniej aktywności, która odpowiada sortowaniu
     const date = item.lastActivity?.toDate ? new Date(item.lastActivity.toDate()) : new Date();
 
@@ -50,8 +80,7 @@ const AiConversationListItem = ({ item, themeColors, selectionMode, isSelected, 
     }, [date]);
 
     const { isPressed, handlePress } = useTapHighlight(() => {
-        if (selectionMode) {
-            // If selection mode active, do selection toggle immediately instead of navigation
+        if (selectionModeRef?.current || selectionMode) {
             isSelected ? onDeselect(item.id) : onSelect(item.id);
             return;
         }
@@ -59,24 +88,28 @@ const AiConversationListItem = ({ item, themeColors, selectionMode, isSelected, 
     });
 
     const handleLongPress = () => {
-        if (!selectionMode) {
+        if (!(selectionModeRef?.current || selectionMode)) {
             onSelect(item.id);
         }
     };
 
+    // ANIMACJA: tylko prop selectionMode steruje animacją przesuwania!
     const animatedContentStyle = useAnimatedStyle(() => {
+        // use selectionModeSV (shared value) to drive a smooth UI-thread animation
+        const sv = (selectionModeSV ? selectionModeSV.value : (selectionMode ? 1 : 0));
         return {
-            marginLeft: withTiming(selectionMode ? 40 : 0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) }),
+            transform: [{ translateX: sv * 40 }],
+            marginRight: 0
         };
     });
 
+    const separatorColor = lightenHex(themeColors.border, 0.6);
+
     return (
-        <Pressable onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomColor: themeColors.border }, (isSelected || isPressed) && { backgroundColor: themeColors.selection }]}>
-            {selectionMode && (
-                <Animated.View entering={FadeIn.duration(ANIM_FADE_DURATION)} exiting={FadeOut.duration(ANIM_FADE_DURATION)} style={styles.checkboxContainer}>
-                    <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={isSelected ? themeColors.tint : themeColors.textMuted}/>
-                </Animated.View>
-            )}
+        <Pressable onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomColor: separatorColor }, (isSelected || isPressed) && { backgroundColor: themeColors.selection }]}>
+            <View style={[styles.checkboxContainer, { opacity: selectionMode ? 1 : 0 }]} pointerEvents={isSelected ? 'auto' : 'none'}>
+                <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={isSelected ? themeColors.tint : themeColors.textMuted}/>
+            </View>
             <Animated.View style={[styles.slidingContainer, animatedContentStyle]}>
                  <View style={[styles.avatar, { backgroundColor: themeColors.input }]}>
                     <Ionicons name="chatbubble-ellipses-outline" size={24} color={themeColors.textMuted} />
@@ -99,7 +132,6 @@ const AiConversationListItemMemo = React.memo(AiConversationListItem, (prev, nex
     const sameSelected = prev.isSelected === next.isSelected;
     const sameSelectionMode = prev.selectionMode === next.selectionMode;
     const sameCount = (prev.item.messageCount || 0) === (next.item.messageCount || 0);
-    
     if (!sameId || !sameSelected || !sameSelectionMode || !sameCount) return false;
     return true;
 });
@@ -107,12 +139,16 @@ const AiConversationListItemMemo = React.memo(AiConversationListItem, (prev, nex
 const AiArchiveScreen = () => {
     const theme = useColorScheme() ?? 'light';
     const themeColors = { ...Colors[theme], selection: theme === 'light' ? '#E8F0FE' : '#2A2A3D', danger: '#FF3B30' };
+    const subtleBorder = lightenHex(themeColors.border, 0.80);
     const navigation = useNavigation();
 
     const [allConversations, setAllConversations] = useState<AiConversation[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedItems, setSelectedItems] = useState<string[]>([]);
+    // ref do natychmiastowej obsługi selection mode (jak w czatach)
+    const selectionModeRef = useRef(selectionMode);
+    useEffect(() => { selectionModeRef.current = selectionMode; }, [selectionMode]);
     const [canScroll, setCanScroll] = useState(false);
     const [modalConfig, setModalConfig] = useState<any>(null);
     const modalLockRef = useRef(false);
@@ -121,6 +157,8 @@ const AiArchiveScreen = () => {
     const contentHeightRef = useRef<number>(0);
     const jellyY = useSharedValue(0);
     const canScrollSV = useSharedValue(false);
+    // Shared value to drive selection-mode slide animation reliably from UI thread
+    const selectionModeSV = useSharedValue(selectionMode ? 1 : 0);
     const JELLY_MULT = 6;
 
     const jellyStyle = useAnimatedStyle(() => ({ transform: [{ translateY: jellyY.value }] }));
@@ -261,11 +299,20 @@ const AiArchiveScreen = () => {
         return () => unsubscribe();
     }, []);
 
-    const enterSelectionMode = () => setSelectionMode(true);
-    const exitSelectionMode = () => { setSelectionMode(false); setSelectedItems([]); };
+    const enterSelectionMode = () => {
+        selectionModeRef.current = true;
+        setSelectionMode(true);
+        try { selectionModeSV.value = withTiming(1, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) } as any); } catch(e) {}
+    };
+    const exitSelectionMode = () => {
+        selectionModeRef.current = false;
+        setSelectionMode(false);
+        setSelectedItems([]);
+        try { selectionModeSV.value = withTiming(0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) } as any); } catch(e) {}
+    };
 
     const handleSelect = (id: string) => {
-        if (!selectionMode) enterSelectionMode();
+        if (!(selectionModeRef.current || selectionMode)) enterSelectionMode();
         setSelectedItems(prev => [...prev, id]);
     };
 
@@ -296,7 +343,6 @@ const AiArchiveScreen = () => {
             } catch (error) {
                 console.error("Błąd podczas usuwania rozmów:", error);
                 try { setAllConversations(prev); } catch (e) { /* ignore */ }
-                showMessage({ message: 'Usuwanie nie powiodło się', description: 'Nie udało się usunąć rozmów — przywrócono listę.', duration: 4000, position: 'bottom', floating: true, backgroundColor: themeColors.danger + 'EE', color: '#fff', style: { alignSelf: 'center', minWidth: 260, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16 } });
             }
         };
         
@@ -335,18 +381,26 @@ const AiArchiveScreen = () => {
                 }}
               />
             )}
-            <View style={styles.headerArea}>
-                 <Animated.View style={[styles.headerWrapper, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
-                    <View style={[styles.mainHeader, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
-                        <Text style={[styles.headerTitle, { color: themeColors.text }]}>Archiwum AI</Text>
+            <StatusBar backgroundColor="#2b2f33" barStyle="light-content" />
+            <View style={[styles.headerSlot, { backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}> 
+                <Animated.View style={[styles.headerLayer, { zIndex: 10 }, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
+                    <View style={[styles.headerContent, { paddingTop: 6, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}> 
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.headerTitle, { color: '#ffffff' }]}>Archiwum AI</Text>
+                        </View>
+                        <View style={{ marginLeft: 12 }}>
+                            {/* no subtitle for this tab */}
+                        </View>
                     </View>
                 </Animated.View>
-                <Animated.View style={[styles.headerWrapper, selectionHeaderStyle]} pointerEvents={selectionMode ? 'auto' : 'none'}>
-                    <View style={[styles.mainHeader, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border, justifyContent: 'space-between' }]}>
-                        <Pressable onPress={exitSelectionMode}><Text style={{ color: themeColors.tint, fontSize: 17, fontWeight: '600' }}>Anuluj</Text></Pressable>
-                        <Text style={[styles.selectionTitle, {color: themeColors.text}]}>{`Zaznaczono: ${selectedItems.length}`}</Text>
-                        <Pressable onPress={handleDeleteSelected} disabled={selectedItems.length === 0}>
-                            <Ionicons name="trash-outline" size={24} color={selectedItems.length > 0 ? themeColors.danger : themeColors.textMuted} />
+                <Animated.View style={[styles.headerLayer, { zIndex: 10 }, selectionHeaderStyle]} pointerEvents={selectionMode ? 'auto' : 'none'}>
+                    <View style={[styles.headerContent, { justifyContent: 'space-between', paddingTop: 0, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center' }]}> 
+                        <Pressable onPress={exitSelectionMode} style={{ padding: 8, marginTop: -36 }}>
+                            <Ionicons name="arrow-back" size={24} color={'#ffffff'} />
+                        </Pressable>
+                        <Text style={[styles.selectionTitle, { color: '#ffffff', textAlign: 'center', marginTop: -36 }]}>{`Zaznaczono: ${selectedItems.length}`}</Text>
+                        <Pressable onPress={handleDeleteSelected} disabled={selectedItems.length === 0} style={{ padding: 8, marginTop: -36 }}>
+                            <Ionicons name="trash-outline" size={24} color={selectedItems.length > 0 ? themeColors.danger : 'rgba(255,255,255,0.7)'} />
                         </Pressable>
                     </View>
                 </Animated.View>
@@ -356,33 +410,38 @@ const AiArchiveScreen = () => {
                 <ActivityIndicator style={{ flex: 1 }} />
             ) : (
                 <View style={{ flex: 1 }} onLayout={(e) => { containerHeightRef.current = e.nativeEvent.layout.height; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}>
-                    { (contentHeightRef.current > containerHeightRef.current) ? (
-                        <AnimatedFlatList
-                            data={allConversations}
-                            keyExtractor={(item) => item.id}
-                            renderItem={({ item }) => <AiConversationListItemMemo item={item} themeColors={themeColors} selectionMode={selectionMode} isSelected={selectedItems.includes(item.id)} onSelect={handleSelect} onDeselect={handleDeselect} />}
-                            ListEmptyComponent={<Text style={styles.emptyListText}>Brak rozmów</Text>}
-                            contentContainerStyle={{ paddingTop: 10 }}
-                            extraData={{selectionMode, selectedItems}}
-                            scrollEnabled={true}
-                            onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
-                        />
-                    ) : (
-                        <GestureDetector gesture={makeGestureForList()}>
-                            <Animated.View style={[{ flex: 1 }, jellyStyle]}>
-                                <AnimatedFlatList
-                                    data={allConversations}
-                                    keyExtractor={(item) => item.id}
-                                    renderItem={({ item }) => <AiConversationListItemMemo item={item} themeColors={themeColors} selectionMode={selectionMode} isSelected={selectedItems.includes(item.id)} onSelect={handleSelect} onDeselect={handleDeselect} />}
-                                    ListEmptyComponent={<Text style={styles.emptyListText}>Brak rozmów</Text>}
-                                    contentContainerStyle={{ paddingTop: 10 }}
-                                    extraData={{selectionMode, selectedItems}}
-                                    scrollEnabled={false}
-                                    onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
-                                />
-                            </Animated.View>
-                        </GestureDetector>
-                    )}
+                    <View style={[styles.contentCard, { backgroundColor: themeColors.card, marginTop: -48, paddingTop: 0, zIndex: 1 }]}> 
+                        <View style={[styles.contentCardInner, { backgroundColor: 'transparent' }]}> 
+                            <View style={{ paddingHorizontal: 10, paddingTop: 0 }} />
+                        </View>
+                        { (contentHeightRef.current > containerHeightRef.current) ? (
+                            <AnimatedFlatList
+                                data={allConversations}
+                                keyExtractor={(item) => item.id}
+                                renderItem={({ item }) => <AiConversationListItemMemo item={item} themeColors={themeColors} selectionMode={selectionMode} selectionModeRef={selectionModeRef} selectionModeSV={selectionModeSV} isSelected={selectedItems.includes(item.id)} onSelect={handleSelect} onDeselect={handleDeselect} />}
+                                ListEmptyComponent={<Text style={styles.emptyListText}>Brak rozmów</Text>}
+                                contentContainerStyle={{ paddingTop: 0 }}
+                                extraData={{selectionMode, selectedItems}}
+                                scrollEnabled={true}
+                                onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
+                            />
+                        ) : (
+                            <GestureDetector gesture={makeGestureForList()}>
+                                <Animated.View style={[{ flex: 1 }, jellyStyle]}>
+                                    <AnimatedFlatList
+                                        data={allConversations}
+                                        keyExtractor={(item) => item.id}
+                                        renderItem={({ item }) => <AiConversationListItemMemo item={item} themeColors={themeColors} selectionMode={selectionMode} selectionModeRef={selectionModeRef} selectionModeSV={selectionModeSV} isSelected={selectedItems.includes(item.id)} onSelect={handleSelect} onDeselect={handleDeselect} />}
+                                        ListEmptyComponent={<Text style={styles.emptyListText}>Brak rozmów</Text>}
+                                        contentContainerStyle={{ paddingTop: 0 }}
+                                        extraData={{selectionMode, selectedItems}}
+                                        scrollEnabled={false}
+                                        onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
+                                    />
+                                </Animated.View>
+                            </GestureDetector>
+                        )}
+                    </View>
                 </View>
             )}
 
@@ -391,11 +450,13 @@ const AiArchiveScreen = () => {
 };
 
 const styles = StyleSheet.create({
-    headerArea: { height: 95 },
-    headerWrapper: { position: 'absolute', top: 0, left: 0, right: 0, height: '100%' },
-    mainHeader: { paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center', height: '100%' },
-    headerTitle: { fontSize: 24, fontWeight: 'bold' },
+    headerSlot: { height: 110 },
+    headerLayer: { position: 'absolute', top: 0, left: 0, right: 0, height: '100%', zIndex: 10 },
+    headerContent: { paddingTop: 6, paddingBottom: 8, paddingHorizontal: 20, flexDirection: 'column', justifyContent: 'flex-start', alignItems: 'flex-start', height: '100%' },
+    headerTitle: { fontSize: 24, fontWeight: 'bold', marginTop: -40 },
     selectionTitle: { fontSize: 18, fontWeight: 'bold' },
+    contentCard: { flex: 1, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden', marginTop: -18, paddingTop: 18 },
+    contentCardInner: { flex: 1, padding: 6, paddingTop: 0, paddingBottom: 0 },
     itemContainer: { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 15, alignItems: 'center', borderBottomWidth: 1 },
     checkboxContainer: { position: 'absolute', left: 15, top: 12, bottom: 12, justifyContent: 'center' },
     slidingContainer: { flex: 1, flexDirection: 'row', alignItems: 'center' },

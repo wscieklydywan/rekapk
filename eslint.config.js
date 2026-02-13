@@ -1,10 +1,3 @@
-// https://docs.expo.dev/guides/using-eslint/
-const { defineConfig } = require('eslint/config');
-const expoConfig = require('eslint-config-expo/flat');
-
-module.exports = defineConfig([
-  expoConfig,
-  {
-    ignores: ['dist/*'],
-  },
-]);
+// Temporary flat config placeholder to avoid flat/legacy config mismatch.
+// The project also contains a legacy `.eslintrc.cjs` with the intended config.
+module.exports = [];

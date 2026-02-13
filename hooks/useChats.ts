@@ -1,6 +1,7 @@
 
 import { useAuth } from '@/hooks/useAuth';
 import { db } from '@/lib/firebase';
+import { isPendingDelete } from '@/lib/pendingDeletes';
 import { Chat } from '@/schemas';
 import { collection, deleteDoc, doc, getDocs, limit, onSnapshot, orderBy, query, startAfter, updateDoc } from 'firebase/firestore';
 import { useEffect, useRef, useState } from 'react';
@@ -63,11 +64,11 @@ export const useChats = ({ pageSize = 30 }: { pageSize?: number } = {}) => {
           bannedAt: data.bannedAt || null,
           lastPushAt: data.lastPushAt || null,
         } as Chat;
-      });
+      }).filter(c => !isPendingDelete(c.id));
 
       // Preserve older (already loaded) chats that are not included in the live snapshot
       const liveIds = new Set(snapshotChats.map(c => c.id));
-      const merged = [...snapshotChats, ...chats.filter(c => !liveIds.has(c.id))];
+      const merged = [...snapshotChats, ...chats.filter(c => !liveIds.has(c.id) && !isPendingDelete(c.id))];
 
       setChats(merged);
       setLoading(false);
@@ -111,7 +112,7 @@ export const useChats = ({ pageSize = 30 }: { pageSize?: number } = {}) => {
         setHasMore(false);
       } else {
         const docs = snap.docs;
-        const older = docs.map(docSnap => ({ ...docSnap.data(), id: docSnap.id } as Chat)).filter(m => !!(m.id));
+        const older = docs.map(docSnap => ({ ...docSnap.data(), id: docSnap.id } as Chat)).filter(m => !!(m.id) && !isPendingDelete(m.id));
         // Append older messages to the end of the list
         setChats(prev => [...prev, ...older]);
         // update last loaded snapshot (used for subsequent pagination)

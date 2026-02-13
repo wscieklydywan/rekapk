@@ -1,18 +1,20 @@
 // Wrapper to replace react-native-flash-message's showMessage
 // with our custom notification system
 
-import { showNotification } from '@/app/contexts/NotificationContext';
+import { hideNotification, showNotification } from '@/app/contexts/NotificationContext';
 
 export function showMessage(config: any) {
-  // Simply delegate to our custom showNotification
-  // which handles all the normalization
-  showNotification(config);
+  // Use the internal NotificationProvider API only.
+  try {
+    // Normalize and call provider-level show function
+    showNotification(config);
+  } catch (e) {
+    // swallow to avoid runtime/ts errors in callers
+    // eslint-disable-next-line no-console
+    console.error('showMessage: showNotification failed', e);
+  }
 }
 
-// Re-export hideMessage as no-op since we handle hide in context
-import { hideNotification } from '@/app/contexts/NotificationContext';
-
 export function hideMessage() {
-  // Delegate to NotificationContext's hide
-  hideNotification();
+  try { hideNotification(); } catch (e) { /* ignore */ }
 }

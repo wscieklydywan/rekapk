@@ -1,14 +1,21 @@
 
+import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { Colors } from '@/constants/theme';
 import { db } from '@/lib/firebase';
 import { deleteCollectionInBatches } from '@/lib/firestore-utils';
-import { showMessage } from '@/lib/showMessage';
+import toast from '@/lib/toastController';
 import { ContactForm, FormMessage } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import Animated, { Easing, FadeIn, FadeOut, SlideInRight, SlideOutRight } from 'react-native-reanimated';
+// animation timings chosen to match Conversation smooth feel
+const FORM_FADE_IN_DUR = 100;
+const FORM_FADE_OUT_DUR = 90;
+const FORM_SLIDE_IN_DUR = 110;
+const FORM_SLIDE_OUT_DUR = 90;
 
 import { useFormContext } from '@/app/contexts/FormProvider';
 
@@ -102,17 +109,22 @@ const FormDetailScreen = () => {
         try {
             await deleteCollectionInBatches(db, collection(db, 'contact_forms', formId, 'messages'));
             await deleteDoc(doc(db, 'contact_forms', formId));
+            try { setTimeout(() => { toast.show({ text: 'Formularz usunięty', variant: 'info' }); }, 220); } catch (e) { /* ignore */ }
         } catch (error) {
             console.error("Błąd podczas usuwania formularza i jego wiadomości: ", error);
             isDeleting.current = false;
-            showMessage({ message: 'Usuwanie nie powiodło się', description: 'Nie udało się usunąć formularza — spróbuj ponownie.', duration: 4000, position: 'bottom', floating: true, backgroundColor: themeColors.danger + 'EE', color: '#fff', style: { alignSelf: 'center', minWidth: 260, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16 } });
+            try { setTimeout(() => { toast.show({ text: 'Błąd: nie udało się usunąć formularza', variant: 'error', duration: 2500 }); }, 50); } catch (e) { /* ignore */ }
         }
     };
+
+    const closeFormModal = () => setModalVisible(false);
 
     const formattedDate = form?.createdAt?.toDate ? new Date(form.createdAt.toDate()).toLocaleString('pl-PL', { day: 'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
 
     return (
-        <View style={[styles.container, { backgroundColor: themeColors.background }]}>
+        <Animated.View entering={FadeIn.duration(FORM_FADE_IN_DUR).easing(Easing.out(Easing.cubic))} exiting={FadeOut.duration(FORM_FADE_OUT_DUR).easing(Easing.in(Easing.cubic))} style={{ flex: 1 }}>
+            <Animated.View entering={SlideInRight.duration(FORM_SLIDE_IN_DUR).easing(Easing.out(Easing.cubic))} exiting={SlideOutRight.duration(FORM_SLIDE_OUT_DUR).easing(Easing.in(Easing.cubic))} style={{ flex: 1 }}>
+                <View style={[styles.container, { backgroundColor: themeColors.background }]}>
             <View style={[styles.header, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon}>
                     <Ionicons name="arrow-back" size={24} color={themeColors.text} />
@@ -153,13 +165,31 @@ const FormDetailScreen = () => {
                     )}
                     <View style={styles.messageBody}>
                         <Text style={[styles.sectionTitle, { color: themeColors.textMuted }]}>Wiadomość</Text>
-                        {messages.map((msg, index) => <Text key={index} style={[styles.messageText, { color: themeColors.text }]}>{msg.text}</Text>)}
+                        {messages.map((msg) => <Text key={msg.id} style={[styles.messageText, { color: themeColors.text }]}>{msg.text}</Text>)}
                     </View>
                 </ScrollView>
             )}
 
+            {modalVisible && (
+                <ConfirmationModal
+                    visible={true}
+                    onClose={closeFormModal}
+                    title={'Usuń formularz'}
+                    message={'Czy na pewno chcesz trwale usunąć ten formularz i wszystkie jego wiadomości?'}
+                    confirmText={'Usuń'}
+                    cancelText={'Anuluj'}
+                    variant={'destructive'}
+                    onConfirm={() => {
+                        closeFormModal();
+                        setTimeout(() => { handleDelete(); }, 160);
+                    }}
+                />
+            )}
 
-        </View>
+
+                </View>
+            </Animated.View>
+        </Animated.View>
     );
 };
 

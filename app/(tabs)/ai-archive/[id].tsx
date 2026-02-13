@@ -1,14 +1,21 @@
 
+import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { Colors } from '@/constants/theme';
 import { db } from '@/lib/firebase';
 import { deleteCollectionInBatches } from '@/lib/firestore-utils';
-import { showMessage } from '@/lib/showMessage';
+import toast from '@/lib/toastController';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { collection, deleteDoc, doc, getDoc, getDocs, query } from 'firebase/firestore';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { TouchableOpacity } from 'react-native-gesture-handler';
+import Animated, { Easing, FadeIn, FadeOut, SlideInRight, SlideOutRight } from 'react-native-reanimated';
+// animation timings chosen to match Conversation smooth feel
+const AI_FADE_IN_DUR = 100;
+const AI_FADE_OUT_DUR = 90;
+const AI_SLIDE_IN_DUR = 110;
+const AI_SLIDE_OUT_DUR = 90;
 
 
 // --- TYPY --- 
@@ -212,9 +219,11 @@ const AiConversationDetailScreen = () => {
                 await deleteCollectionInBatches(db, collection(db, 'ai_conversations', id, 'messages'));
 
                 await deleteDoc(doc(db, 'ai_conversations', id));
+                try { if (router.canGoBack()) router.back(); } catch(e) { /* ignore */ }
+                try { setTimeout(() => { toast.show({ text: 'Rozmowa usunięta', variant: 'info' }); }, 220); } catch (e) { /* ignore */ }
             } catch (error) {
                 console.error("Błąd podczas usuwania rozmowy:", error);
-                showMessage({ message: 'Usuwanie nie powiodło się', description: 'Nie udało się usunąć rozmowy — spróbuj ponownie.', duration: 4000, position: 'bottom', floating: true, backgroundColor: themeColors.danger + 'EE', color: '#fff', style: { alignSelf: 'center', minWidth: 260, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16 } });
+                try { setTimeout(() => { toast.show({ text: 'Błąd: nie udało się usunąć rozmowy', variant: 'error', duration: 2500 }); }, 50); } catch (e) { /* ignore */ }
             }
         };
 
@@ -231,20 +240,44 @@ const AiConversationDetailScreen = () => {
     const contactName = conversationInfo?.userContact || '(bez nazwy)';
     const messageCount = messages.length;
 
-    return (
-        <View style={{ flex: 1, backgroundColor: themeColors.background }}>
+        return (
+        <Animated.View entering={FadeIn.duration(AI_FADE_IN_DUR).easing(Easing.out(Easing.cubic))} exiting={FadeOut.duration(AI_FADE_OUT_DUR).easing(Easing.in(Easing.cubic))} style={{ flex: 1 }}>
+            <Animated.View entering={SlideInRight.duration(AI_SLIDE_IN_DUR).easing(Easing.out(Easing.cubic))} exiting={SlideOutRight.duration(AI_SLIDE_OUT_DUR).easing(Easing.in(Easing.cubic))} style={{ flex: 1 }}>
+                                <View style={{ flex: 1, backgroundColor: themeColors.background }}>
+                        {modalConfig?.title && modalConfig?.confirmText && (
+                            <ConfirmationModal
+                                visible={true}
+                                onClose={closeModal}
+                                title={modalConfig.title}
+                                message={modalConfig.message || ''}
+                                confirmText={modalConfig.confirmText}
+                                cancelText={modalConfig.cancelText}
+                                variant={modalConfig.variant}
+                                onConfirm={() => {
+                                    const onConfirmAction = modalConfig?.onConfirm;
+                                    closeModal();
+                                    if (onConfirmAction) {
+                                        setTimeout(() => { try { onConfirmAction(); } catch(e) { console.error(e); } }, 160);
+                                    }
+                                }}
+                            />
+                        )}
             {/* Header */}
-            <View style={[styles.headerContainer, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                    <Ionicons name="chevron-back" size={28} color={themeColors.tint} />
-                </TouchableOpacity>
-                <View style={styles.headerTitleContainer}>
-                     <Text style={[styles.headerTitle, { color: themeColors.text }]} numberOfLines={1}>{contactName}</Text>
-                     <Text style={[styles.headerSubtitle, { color: themeColors.textMuted }]}>{loading ? 'Ładowanie...' : `${messageCount} wiadomości`}</Text>
-                </View>
-                <TouchableOpacity onPress={handleDelete} style={styles.deleteButton}>
-                    <Ionicons name="trash-outline" size={24} color={themeColors.danger} />
-                </TouchableOpacity>
+                <View style={[styles.headerSlot, { backgroundColor: themeColors.card ?? themeColors.background, borderBottomColor: themeColors.border }]}> 
+                    <Animated.View style={[styles.headerLayer]} pointerEvents={'auto'}>
+                        <View style={[styles.headerContent]}> 
+                        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+                            <Ionicons name="chevron-back" size={28} color={themeColors.tint} />
+                        </TouchableOpacity>
+                        <View style={styles.headerTitleContainer}>
+                             <Text style={[styles.headerTitle, { color: themeColors.text }]} numberOfLines={1}>{contactName}</Text>
+                             <Text style={[styles.headerSubtitle, { color: themeColors.textMuted }]}>{loading ? 'Ładowanie...' : `${messageCount} wiadomości`}</Text>
+                        </View>
+                        <TouchableOpacity onPress={handleDelete} style={styles.deleteButton}>
+                            <Ionicons name="trash-outline" size={24} color={themeColors.danger} />
+                        </TouchableOpacity>
+                    </View>
+                </Animated.View>
             </View>
 
             {loading ? (
@@ -264,18 +297,27 @@ const AiConversationDetailScreen = () => {
                 />
             )}
 
-        </View>
+                </View>
+            </Animated.View>
+        </Animated.View>
     );
 };
 
 // --- STYLE --- 
 
 const styles = StyleSheet.create({
-    headerContainer: {
-        paddingTop: 50,
-        paddingBottom: 10,
+    headerSlot: { height: 64, borderBottomWidth: 1 /* borderBottomColor applied inline */, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 4, elevation: 1 },
+    headerLayer: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: '100%',
+    },
+    headerContent: {
+        paddingTop: 28,
+        paddingBottom: 8,
         paddingHorizontal: 15,
-        borderBottomWidth: 1,
         flexDirection: 'row',
         alignItems: 'center',
     },

@@ -5,12 +5,11 @@ import TabTransition from '@/components/TabTransition';
 import { ANIM_FADE_DURATION, ANIM_TRANSLATE_DURATION } from '@/constants/animations';
 import { Colors } from '@/constants/theme';
 import { useTapHighlight } from '@/hooks/useTapHighlight';
-import { showMessage } from '@/lib/showMessage';
 import { ContactForm } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, Pressable, StatusBar, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { cancelAnimation, Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
@@ -46,6 +45,22 @@ const generateColor = (str: string) => {
     return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 };
 
+// Lighten a hex color by moving it towards white by `amount` (0..1).
+const lightenHex = (hex: string, amount = 0.6) => {
+    try {
+        if (!hex || hex[0] !== '#') return hex;
+        const h = hex.replace('#', '');
+        const r = parseInt(h.substring(0,2), 16);
+        const g = parseInt(h.substring(2,4), 16);
+        const b = parseInt(h.substring(4,6), 16);
+        const nr = Math.round(r + (255 - r) * amount);
+        const ng = Math.round(g + (255 - g) * amount);
+        const nb = Math.round(b + (255 - b) * amount);
+        const toHex = (v: number) => v.toString(16).padStart(2, '0');
+        return `#${toHex(nr)}${toHex(ng)}${toHex(nb)}`;
+    } catch (e) { return hex; }
+};
+
 const Avatar = ({ contactName }: { contactName: string }) => {
     const initial = contactName ? contactName.charAt(0).toUpperCase() : '?';
     const bgColor = generateColor(contactName || '');
@@ -58,7 +73,7 @@ const Avatar = ({ contactName }: { contactName: string }) => {
 
 const AnimatedFlatList = Animated.createAnimatedComponent(FlatList) as unknown as typeof FlatList;
 
-const FormListItem = ({ item, themeColors, selectionMode, isSelected, onSelect, onDeselect }: { item: ContactForm, themeColors: any, selectionMode: boolean, isSelected: boolean, onSelect: (id: string) => void, onDeselect: (id: string) => void }) => {
+const FormListItem = ({ item, themeColors, selectionMode, isSelected, onSelect, onDeselect, isFirst, isLast }: { item: ContactForm, themeColors: any, selectionMode: boolean, isSelected: boolean, onSelect: (id: string) => void, onDeselect: (id: string) => void, isFirst?: boolean, isLast?: boolean }) => {
     const router = useRouter();
     const isUnread = item.adminUnread > 0;
 
@@ -101,12 +116,12 @@ const FormListItem = ({ item, themeColors, selectionMode, isSelected, onSelect, 
     
     const animatedContentStyle = useAnimatedStyle(() => {
         return {
-            marginLeft: withTiming(selectionMode ? 40 : 0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) }),
+            transform: [{ translateX: withTiming(selectionMode ? 40 : 0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) }) }],
         };
     });
 
     return (
-        <Pressable onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, (isSelected || isPressed) && { backgroundColor: themeColors.selection }]}>
+        <Pressable onPress={handlePress} onLongPress={handleLongPress} android_ripple={{ color: 'rgba(0,0,0,0.04)', borderless: false }} style={[styles.itemContainer, (isSelected || isPressed) && { backgroundColor: themeColors.selection }]}>
              {selectionMode && (
                 <Animated.View entering={FadeIn.duration(ANIM_FADE_DURATION)} exiting={FadeOut.duration(ANIM_FADE_DURATION)} style={styles.checkboxContainer}>
                     <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={isSelected ? themeColors.tint : themeColors.textMuted}/>
@@ -137,15 +152,19 @@ const FormListItemMemo = React.memo(FormListItem, (prev, next) => {
     const sameId = prev.item.id === next.item.id;
     const sameSelected = prev.isSelected === next.isSelected;
     const sameSelectionMode = prev.selectionMode === next.selectionMode;
+    const sameIsFirst = prev.isFirst === next.isFirst;
+    const sameIsLast = prev.isLast === next.isLast;
     const sameName = (prev.item.userInfo?.contact || null) === (next.item.userInfo?.contact || null);
+    const sameUnread = (prev.item.adminUnread || 0) === (next.item.adminUnread || 0);
     
-    if (!sameId || !sameSelected || !sameSelectionMode || !sameName) return false;
+    if (!sameId || !sameSelected || !sameSelectionMode || !sameIsFirst || !sameIsLast || !sameName || !sameUnread) return false;
     return true;
 });
 
 const FormsListScreen = () => {
     const theme = useColorScheme() ?? 'light';
     const themeColors = { ...Colors[theme], selection: theme === 'light' ? '#E8F0FE' : '#2A2A3D', danger: '#FF3B30' };
+    const subtleBorder = lightenHex(themeColors.border, 0.80);
     const { forms, loading, setForms } = useFormContext();
     const navigation = useNavigation();
 
@@ -288,12 +307,7 @@ const FormsListScreen = () => {
     useEffect(() => { navigation.setOptions({ headerShown: false }); }, [navigation]);
 
     const sortedForms = useMemo(() => {
-        return [...forms].sort((a, b) => {
-            const aUnread = a.adminUnread > 0;
-            const bUnread = b.adminUnread > 0;
-            if (aUnread !== bUnread) return aUnread ? -1 : 1;
-            return (b.createdAt?.toMillis() ?? 0) - (a.createdAt?.toMillis() ?? 0);
-        });
+        return [...forms].sort((a, b) => (b.createdAt?.toMillis() ?? 0) - (a.createdAt?.toMillis() ?? 0));
     }, [forms]);
 
     const enterSelectionMode = () => setSelectionMode(true);
@@ -329,9 +343,8 @@ const FormsListScreen = () => {
                 }
             } catch (error) {
                 console.error("Błąd podczas usuwania formularzy i ich wiadomości:", error);
-                // rollback UI + show compact error toast
+                // rollback UI
                 try { setForms(prev); } catch (e) { /* ignore */ }
-                showMessage({ message: 'Usuwanie nie powiodło się', description: 'Nie udało się usunąć wybranych formularzy — przywrócono listę.', duration: 4000, position: 'bottom', floating: true, backgroundColor: themeColors.danger + 'EE', color: '#fff', style: { alignSelf: 'center', minWidth: 260, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16 } });
             }
         };
         
@@ -370,18 +383,26 @@ const FormsListScreen = () => {
                 }}
               />
             )}
-            <View style={styles.headerArea}>
-                <Animated.View style={[styles.headerWrapper, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
-                    <View style={[styles.mainHeader, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
-                        <Text style={[styles.headerTitle, { color: themeColors.text }]}>Formularze</Text>
+            <StatusBar backgroundColor="#2b2f33" barStyle="light-content" />
+            <View style={[styles.headerSlot, { backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}> 
+                <Animated.View style={[styles.headerLayer, { zIndex: 6 }, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
+                    <View style={[styles.headerContent, { paddingTop: 6, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}> 
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.headerTitle, { color: '#ffffff' }]}>Formularze</Text>
+                        </View>
+                        <View style={{ marginLeft: 12 }}>
+                            {/* no subtitle for this tab */}
+                        </View>
                     </View>
                 </Animated.View>
-                <Animated.View style={[styles.headerWrapper, selectionHeaderStyle]} pointerEvents={selectionMode ? 'auto' : 'none'}>
-                    <View style={[styles.mainHeader, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border, justifyContent: 'space-between' }]}>
-                        <Pressable onPress={exitSelectionMode}><Text style={{ color: themeColors.tint, fontSize: 17, fontWeight: '600' }}>Anuluj</Text></Pressable>
-                        <Text style={[styles.selectionTitle, {color: themeColors.text}]}>{`Zaznaczono: ${selectedItems.length}`}</Text>
-                        <Pressable onPress={handleDeleteSelected} disabled={selectedItems.length === 0}>
-                            <Ionicons name="trash-outline" size={24} color={selectedItems.length > 0 ? themeColors.danger : themeColors.textMuted} />
+                <Animated.View style={[styles.headerLayer, { zIndex: 6 }, selectionHeaderStyle]} pointerEvents={selectionMode ? 'auto' : 'none'}>
+                    <View style={[styles.headerContent, { justifyContent: 'space-between', paddingTop: 0, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center' }]}> 
+                        <Pressable onPress={exitSelectionMode} style={{ padding: 8, marginTop: -36 }}>
+                            <Ionicons name="arrow-back" size={24} color={'#ffffff'} />
+                        </Pressable>
+                        <Text style={[styles.selectionTitle, { color: '#ffffff', textAlign: 'center', marginTop: -36 }]}>{`Zaznaczono: ${selectedItems.length}`}</Text>
+                        <Pressable onPress={handleDeleteSelected} disabled={selectedItems.length === 0} style={{ padding: 8, marginTop: -36 }}>
+                            <Ionicons name="trash-outline" size={24} color={selectedItems.length > 0 ? themeColors.danger : 'rgba(255,255,255,0.7)'} />
                         </Pressable>
                     </View>
                 </Animated.View>
@@ -391,64 +412,102 @@ const FormsListScreen = () => {
                 <ActivityIndicator style={{ flex: 1 }} size="large" color={themeColors.tint} />
             ) : (
                 <View style={{ flex: 1 }} onLayout={(e) => { containerHeightRef.current = e.nativeEvent.layout.height; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}>
-                    { /* Render AnimatedFlatList directly when scrollable, otherwise wrap in GestureDetector */ }
-                    { (contentHeightRef.current > containerHeightRef.current) ? (
-                        <AnimatedFlatList
-                            data={sortedForms}
-                            keyExtractor={(item) => item.id}
-                            renderItem={({ item }) => (
-                                <FormListItemMemo 
-                                    item={item} 
-                                    themeColors={themeColors} 
-                                    selectionMode={selectionMode} 
-                                    isSelected={selectedItems.includes(item.id)} 
-                                    onSelect={handleSelect} 
-                                    onDeselect={handleDeselect} 
-                                />
-                            )}
-                            ListEmptyComponent={
-                                <View style={styles.emptyContainer}>
-                                    <Ionicons name="mail-outline" size={50} color={themeColors.textMuted} />
-                                    <Text style={[styles.emptyText, { color: themeColors.textMuted }]}>Twoja skrzynka jest pusta</Text>
-                                </View>
-                            }
-                            contentContainerStyle={styles.listContainer}
-                            ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: themeColors.border }]} />}
-                            extraData={{ selectionMode, selectedItems }}
-                            scrollEnabled={true}
-                            onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
-                        />
-                    ) : (
-                        <GestureDetector gesture={makeGestureForList()}>
-                            <Animated.View style={[{ flex: 1 }, jellyStyle]}>
-                                <AnimatedFlatList
-                                    data={sortedForms}
-                                    keyExtractor={(item) => item.id}
-                                    renderItem={({ item }) => (
-                                        <FormListItemMemo 
-                                            item={item} 
-                                            themeColors={themeColors} 
-                                            selectionMode={selectionMode} 
-                                            isSelected={selectedItems.includes(item.id)} 
-                                            onSelect={handleSelect} 
-                                            onDeselect={handleDeselect} 
-                                        />
-                                    )}
-                                    ListEmptyComponent={
-                                        <View style={styles.emptyContainer}>
-                                            <Ionicons name="mail-outline" size={50} color={themeColors.textMuted} />
-                                            <Text style={[styles.emptyText, { color: themeColors.textMuted }]}>Twoja skrzynka jest pusta</Text>
-                                        </View>
-                                    }
-                                    contentContainerStyle={styles.listContainer}
-                                    ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: themeColors.border }]} />}
-                                    extraData={{ selectionMode, selectedItems }}
-                                    scrollEnabled={false}
-                                    onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
-                                />
-                            </Animated.View>
-                        </GestureDetector>
-                    )}
+                    {/* darker card background in light theme, tiles inside */}
+                    <View style={[styles.contentCard, { backgroundColor: theme === 'light' ? '#f3f4f6' : themeColors.card, marginTop: -48, paddingTop: 0, zIndex: 1 }]}> 
+                        <View style={[styles.contentCardInner, { backgroundColor: 'transparent' }]}> 
+                               <View style={{ paddingHorizontal: 10, paddingTop: 0 }}>
+                            {/* header moved into ListHeaderComponent so it scrolls with the list */}
+                        </View>
+                               </View>
+                        { /* Render AnimatedFlatList directly when scrollable, otherwise wrap in GestureDetector */ }
+                        { (contentHeightRef.current > containerHeightRef.current) ? (
+                                    <AnimatedFlatList
+                                        data={sortedForms}
+                                        keyExtractor={(item) => item.id}
+                                        renderItem={({ item, index }) => {
+                                            const isSelected = selectedItems.includes(item.id);
+                                            const isFirst = index === 0;
+                                            const isLast = index === sortedForms.length - 1;
+                                            return (
+                                                <View style={{ paddingHorizontal: 8 }}>
+                                                    <View style={{ backgroundColor: '#fff', borderRadius: 6, borderTopLeftRadius: isFirst ? 20 : 6, borderTopRightRadius: isFirst ? 20 : 6, borderBottomLeftRadius: isLast ? 20 : 6, borderBottomRightRadius: isLast ? 20 : 6, marginTop: 1, marginBottom: 1, overflow: 'hidden' }}>
+                                                        <FormListItemMemo
+                                                            item={item}
+                                                            themeColors={themeColors}
+                                                            selectionMode={selectionMode}
+                                                            isSelected={isSelected}
+                                                            isFirst={isFirst}
+                                                            isLast={isLast}
+                                                            onSelect={handleSelect}
+                                                            onDeselect={handleDeselect}
+                                                        />
+                                                    </View>
+                                                </View>
+                                            );
+                                        }}
+                                        ListHeaderComponent={() => (
+                                            <View style={{ paddingLeft: 17, paddingRight: 8, paddingTop: 6 }}>
+                                                <Text style={{ color: themeColors.textMuted, fontSize: 15, fontWeight: '600', marginBottom: 6 }}>Odebrane</Text>
+                                            </View>
+                                        )}
+                                        ListEmptyComponent={
+                                            <View style={styles.emptyContainer}>
+                                                <Ionicons name="mail-outline" size={50} color={themeColors.textMuted} />
+                                                <Text style={[styles.emptyText, { color: themeColors.textMuted }]}>Twoja skrzynka jest pusta</Text>
+                                            </View>
+                                        }
+                                        contentContainerStyle={[styles.listContainer, { backgroundColor: 'transparent', paddingTop: 0 }]}
+                                        extraData={{ selectionMode, selectedItems }}
+                                        scrollEnabled={true}
+                                        onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
+                                    />
+                                ) : (
+                            <GestureDetector gesture={makeGestureForList()}>
+                                    <Animated.View style={[{ flex: 1 }, jellyStyle]}>
+                                    <AnimatedFlatList
+                                        data={sortedForms}
+                                        keyExtractor={(item) => item.id}
+                                        renderItem={({ item, index }) => {
+                                            const isSelected = selectedItems.includes(item.id);
+                                            const isFirst = index === 0;
+                                            const isLast = index === sortedForms.length - 1;
+                                            return (
+                                                <View style={{ paddingHorizontal: 8 }}>
+                                                    <View style={{ backgroundColor: '#fff', borderRadius: isFirst || isLast ? 20 : 6, marginTop: 1, marginBottom: 1, overflow: 'hidden' }}>
+                                                        <FormListItemMemo
+                                                            item={item}
+                                                            themeColors={themeColors}
+                                                            selectionMode={selectionMode}
+                                                            isSelected={isSelected}
+                                                            isFirst={isFirst}
+                                                            isLast={isLast}
+                                                            onSelect={handleSelect}
+                                                            onDeselect={handleDeselect}
+                                                        />
+                                                    </View>
+                                                </View>
+                                            );
+                                        }}
+                                        ListHeaderComponent={() => (
+                                            <View style={{ paddingLeft: 18, paddingRight: 8, paddingTop: 6 }}>
+                                                <Text style={{ color: themeColors.textMuted, fontSize: 15, fontWeight: '600', marginBottom: 6 }}>Odebrane</Text>
+                                            </View>
+                                        )}
+                                        ListEmptyComponent={
+                                            <View style={styles.emptyContainer}>
+                                                <Ionicons name="mail-outline" size={50} color={themeColors.textMuted} />
+                                                <Text style={[styles.emptyText, { color: themeColors.textMuted }]}>Twoja skrzynka jest pusta</Text>
+                                            </View>
+                                        }
+                                        contentContainerStyle={[styles.listContainer, { backgroundColor: 'transparent', paddingTop: 0 }]}
+                                        extraData={{ selectionMode, selectedItems }}
+                                        scrollEnabled={false}
+                                        onContentSizeChange={(_, h) => { contentHeightRef.current = h; const cs = contentHeightRef.current > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}
+                                    />
+                                </Animated.View>
+                            </GestureDetector>
+                        )}
+                    </View>
                 </View>
             )}
 
@@ -457,11 +516,13 @@ const FormsListScreen = () => {
 };
 
 const styles = StyleSheet.create({
-    headerArea: { height: 95 },
-    headerWrapper: { position: 'absolute', top: 0, left: 0, right: 0, height: '100%' },
-    mainHeader: { paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center', height: '100%' },
-    headerTitle: { fontSize: 24, fontWeight: 'bold' },
+    headerSlot: { height: 110 },
+    headerLayer: { position: 'absolute', top: 0, left: 0, right: 0, height: '100%', zIndex: 10 },
+    headerContent: { paddingTop: 6, paddingBottom: 8, paddingHorizontal: 20, flexDirection: 'column', justifyContent: 'flex-start', alignItems: 'flex-start', height: '100%' },
+    headerTitle: { fontSize: 24, fontWeight: 'bold', marginTop: -40 },
     selectionTitle: { fontSize: 18, fontWeight: 'bold' },
+    contentCard: { flex: 1, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden', marginTop: -18, paddingTop: 18 },
+    contentCardInner: { flex: 1, padding: 6, paddingTop: 0, paddingBottom: 0 },
     listContainer: { paddingBottom: 20 },
     itemContainer: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16 },
     checkboxContainer: { position: 'absolute', left: 15, top: 12, bottom: 12, justifyContent: 'center' },

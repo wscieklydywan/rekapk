@@ -25,6 +25,7 @@ export const SelectionModal: React.FC<SelectionModalProps> = ({ visible, onClose
   return (
     <AnimatedModal visible={visible} onClose={onClose} position="bottom" contentStyle={[styles.modalView, { backgroundColor: themeColors.card }]}>
         <Text style={[styles.modalTitle, { color: themeColors.text }]}>{title}</Text>
+        <Text style={[styles.modalDesc, { color: themeColors.textMuted }]}>Wybierz, z których czatów chcesz otrzymywać powiadomienia — tylko z przypisanych do Ciebie i nieprzypisanych, lub wszystkie.</Text>
 
         <View style={styles.optionsContainer}>
           {options.map((option) => (
@@ -69,8 +70,16 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlign: 'center',
   },
+  modalDesc: {
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 12,
+    textAlign: 'center',
+    paddingHorizontal: 6,
+  },
   optionsContainer: {
     marginBottom: 20,
+    transform: [{ translateY: 8 }],
   },
   optionButton: {
     flexDirection: 'row',
@@ -87,6 +96,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 15,
     alignItems: 'center',
+    transform: [{ translateY: 10 }],
   },
   closeButtonText: {
     fontSize: 16,

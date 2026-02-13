@@ -8,15 +8,20 @@ import { Colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/useAuth';
 import { db } from '@/lib/firebase';
 import { deleteCollectionInBatches } from '@/lib/firestore-utils';
+import { addPendingDelete, removePendingDelete } from '@/lib/pendingDeletes';
+import toast from '@/lib/toastController';
 import { Chat, User } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { collection, deleteDoc, doc } from 'firebase/firestore';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, FlatList, InteractionManager, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { AccessibilityInfo, ActivityIndicator, FlatList, PixelRatio, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { Gesture, GestureDetector, NativeViewGestureHandler } from 'react-native-gesture-handler';
 import PagerView from 'react-native-pager-view';
 import Animated, { cancelAnimation, Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+
+const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity) as any;
+const AnimatedText = Animated.createAnimatedComponent(Text) as any;
 
 const AnimatedFlatList = Animated.createAnimatedComponent(FlatList) as unknown as typeof FlatList;
 
@@ -24,7 +29,6 @@ import { ConfirmationModal } from '@/components/ConfirmationModal';
 
 const ITEM_HEIGHT = 84; // approximate fixed height for chat items to help FlatList layout calculation
 
-import { showMessage } from '@/lib/showMessage';
 
 const statusColors = {
     active: '#3CB371',
@@ -55,17 +59,43 @@ const getInitials = (name?: string, email?: string): string => {
     return 'AD'; 
 };
 
+// Lighten a hex color by moving it towards white by `amount` (0..1).
+const lightenHex = (hex: string, amount = 0.35) => {
+    try {
+        if (!hex || hex[0] !== '#') return hex;
+        const h = hex.replace('#', '');
+        const r = parseInt(h.substring(0,2), 16);
+        const g = parseInt(h.substring(2,4), 16);
+        const b = parseInt(h.substring(4,6), 16);
+        const nr = Math.round(r + (255 - r) * amount);
+        const ng = Math.round(g + (255 - g) * amount);
+        const nb = Math.round(b + (255 - b) * amount);
+        const toHex = (v: number) => v.toString(16).padStart(2, '0');
+        return `#${toHex(nr)}${toHex(ng)}${toHex(nb)}`;
+    } catch (e) { return hex; }
+};
+
+const SEPARATOR_THICKNESS = 3 / PixelRatio.get();
+
 const styles = StyleSheet.create({
-    headerArea: { height: 95 },
-    headerWrapper: { position: 'absolute', top: 0, left: 0, right: 0, height: '100%' },
-    headerContainer: { paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20, borderBottomWidth: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', height: '100%' },
-    headerTitle: { fontSize: 24, fontWeight: 'bold' },
-    headerSubtitle: { fontSize: 16, fontWeight: '600' },
+    headerSlot: { height: 110, /* removed borderBottomWidth to avoid straight hairline */ shadowColor: '#000', shadowOffset: { width: 0, height: 1.2 }, shadowOpacity: 0.08, shadowRadius: 2.5, elevation: 2 },
+    headerLayer: { position: 'absolute', top: 0, left: 0, right: 0, height: '100%', zIndex: 6, elevation: 12 },
+    headerContent: { paddingTop: 6, paddingBottom: 8, paddingHorizontal: 20, flexDirection: 'column', justifyContent: 'flex-start', alignItems: 'flex-start', height: '100%' },
+    headerTitle: { fontSize: 24, fontWeight: 'bold', marginTop: -40 },
+    headerSubtitle: { fontSize: 12, fontWeight: '600', marginTop: -32 },
     selectionTitle: { fontSize: 18, fontWeight: 'bold' },
-    filterOuterContainer: { height: 44, borderBottomWidth: 1, flexDirection: 'row' },
-    filterContentContainer: { alignItems: 'center', paddingHorizontal: 10 },
-    filterButton: { paddingVertical: 6, paddingHorizontal: 14, borderRadius: 18, marginHorizontal: 4 },
-    filterText: { fontSize: 13, fontWeight: '600' },
+    filterOuterContainer: { height: 38, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row',
+        // slightly stronger subtle shadow for filter row (reduced visual weight)
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1.0 },
+        shadowOpacity: 0.06,
+        shadowRadius: 2,
+        elevation: 1,
+        zIndex: 10
+    },
+    filterContentContainer: { alignItems: 'center', paddingHorizontal: 8 },
+    filterButton: { paddingVertical: 4, paddingHorizontal: 12, borderRadius: 16, marginHorizontal: 4 },
+    filterText: { fontSize: 12, fontWeight: '600' },
     itemContainer: { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 15, alignItems: 'center', borderBottomWidth: 1, overflow: 'hidden' },
     checkboxContainer: { position: 'absolute', left: 15, top: 12, bottom: 12, justifyContent: 'center', alignItems: 'center' },
     slidingContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', marginRight: 110 },
@@ -87,6 +117,15 @@ const styles = StyleSheet.create({
     statusText: { fontSize: 11, fontWeight: 'bold', color: 'white' },
     emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 150 },
     emptyText: { marginTop: 16, fontSize: 16 },
+    contentCard: { flex: 1, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden', marginTop: -18, paddingTop: 18 },
+    headerIndicatorContainer: { width: '100%', alignItems: 'flex-start', paddingLeft: 20, marginTop: 6 },
+    headerIndicatorText: { color: 'rgba(255,255,255,0.95)', fontWeight: '700', fontSize: 13 },
+    headerIndicatorBar: { height: 3, width: 56, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.95)', marginTop: 6 },
+    filterChipsRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, marginTop: -12, marginLeft: -4 },
+    filterSeparator: { position: 'absolute', left: 0, right: 0, height: SEPARATOR_THICKNESS, bottom: 0 },
+    chip: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 16, backgroundColor: 'transparent', marginRight: 4, minHeight: 36, alignItems: 'center', justifyContent: 'center' },
+    chipText: { fontSize: 13, fontWeight: '600' },
+    chipActive: { backgroundColor: '#0b84ff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.12, shadowRadius: 4, elevation: 2 },
 });
 
 type FilterType = 'all' | 'active' | 'waiting' | 'closed';
@@ -109,6 +148,7 @@ const PERF_DEBUG = !!(global as any).__PERF_DEBUG__ || false;
 const ChatListItemComponent = ({ item, themeColors, filter, selectionModeRef, selectionMode = false, onSelect, onDeselect, isSelected, assignedAdmin, itemIndex = 0 }: ChatListItemProps) => {
     const router = useRouter();
     const [isPressed, setIsPressed] = useState(false);
+    const _pressHandledRef = useRef(false);
 
     // PERF: render timing (diagnostic, no-op unless __PERF_DEBUG__ is true)
     const _renderStartRef = useRef<number | null>(null);
@@ -152,20 +192,25 @@ const ChatListItemComponent = ({ item, themeColors, filter, selectionModeRef, se
     }, [item.lastMessageTimestamp]);
 
     const handlePress = () => {
+        // If we already handled selection on pressIn, ignore the subsequent onPress to avoid double-toggle
+        if (_pressHandledRef.current) { _pressHandledRef.current = false; return; }
+
         if (selectionModeRef?.current || selectionMode) {
             isSelected ? onDeselect(item.id) : onSelect(item.id);
         } else {
             setIsPressed(true);
             const contactName = encodeURIComponent(item.userInfo.contact || '');
-            // If a notification banner is shown for this specific chat, hide it when user opens it directly from list
             try { hideNotificationForChat?.(item.id); } catch (e) { /* ignore */ }
-
-            // instrument navigation latency (console.time started just before navigation)
             try { console.time('openChat'); } catch (e) { /* ignore */ }
-
-            // Navigate immediately without frame delay
             setIsPressed(false);
             router.push((`/conversation/${item.id}?status=${item.status}&lastFilter=${filter}&contactName=${contactName}`) as any);
+        }
+    };
+
+    const handlePressInSelection = () => {
+        if (selectionModeRef?.current || selectionMode) {
+            _pressHandledRef.current = true;
+            isSelected ? onDeselect(item.id) : onSelect(item.id);
         }
     };
 
@@ -181,7 +226,7 @@ const ChatListItemComponent = ({ item, themeColors, filter, selectionModeRef, se
     
     const animatedContentStyle = useAnimatedStyle(() => {
         return {
-            marginLeft: withTiming(selectionMode ? 40 : 0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) })
+            transform: [{ translateX: withTiming(selectionMode ? 40 : 0, { duration: ANIM_TRANSLATE_DURATION, easing: Easing.inOut(Easing.ease) }) }]
         };
     });
 
@@ -209,8 +254,10 @@ const ChatListItemComponent = ({ item, themeColors, filter, selectionModeRef, se
         return '';
     }, [item.adminUnread, item.status]);
 
+    const separatorColor = lightenHex(themeColors.border, 0.6);
+
     return (
-        <Pressable onPress={handlePress} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomColor: themeColors.border }, (isSelected || isPressed) && { backgroundColor: themeColors.selection }]}>
+        <Pressable onPress={handlePress} onPressIn={handlePressInSelection} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomWidth: 0 }, (isSelected || isPressed) && { backgroundColor: themeColors.selection }]}>
             {/* Checkbox: animated entering/exiting to match other tabs */}
             {selectionMode && (
                 <Animated.View entering={FadeIn.duration(ANIM_FADE_DURATION)} exiting={FadeOut.duration(ANIM_FADE_DURATION)} style={styles.checkboxContainer} pointerEvents={isSelected ? 'auto' : 'none'}>
@@ -248,6 +295,7 @@ const ChatListItemComponent = ({ item, themeColors, filter, selectionModeRef, se
                 <Text style={[styles.timestamp, { color: themeColors.textMuted }]}>{formattedTimestamp}</Text>
                 <View style={statusInfo.style}><Text style={styles.statusText}>{statusInfo.text}</Text></View>
             </View>
+            <View style={{ position: 'absolute', left: 6, right: 6, bottom: 0, height: SEPARATOR_THICKNESS, backgroundColor: separatorColor }} />
         </Pressable>
     );
 };
@@ -282,12 +330,14 @@ const ChatListItem = React.memo(ChatListItemComponent, (prev, next) => {
 const ActiveChatsScreen = () => {
     const theme = useColorScheme() ?? 'light';
     const themeColors = useMemo(() => ({ ...Colors[theme], selection: theme === 'light' ? '#E8F0FE' : '#2A2A3D', danger: '#FF3B30' }), [theme]);
+    const subtleBorder = lightenHex(themeColors.border, 0.80);
     const { displayName } = useAuth();
     const navigation = useNavigation();
     const router = useRouter();
     const params = useLocalSearchParams<{ lastFilter?: string }>();
     
     const [filter, setFilter] = useState<FilterType>((params.lastFilter as FilterType) || 'all');
+    const currentFilterRef = useRef<FilterType>(filter);
     const { chats: allChats, loading, setChats, admins, loadMore, hasMore, isLoadingMore } = useChatContext(); 
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedChats, setSelectedChats] = useState<string[]>([]);
@@ -478,7 +528,8 @@ const ActiveChatsScreen = () => {
             closeModal();
             exitSelectionMode();
             
-            // optimistic remove from UI
+            // mark pending deletes so live snapshot won't re-add them, then optimistic remove from UI
+            try { chatsToDelete.forEach(id => addPendingDelete(id)); } catch (e) { /* ignore */ }
             const prev = allChats;
             setChats((prevChats: Chat[]) => prevChats.filter((chat: Chat) => !chatsToDelete.includes(chat.id)));
             try {
@@ -486,17 +537,21 @@ const ActiveChatsScreen = () => {
                     await deleteCollectionInBatches(db, collection(db, 'chats', chatId, 'messages'));
                     await deleteDoc(doc(db, 'chats', chatId));
                 }
+                try { setTimeout(() => { toast.show({ text: chatsToDelete.length > 1 ? `Usunięto ${chatsToDelete.length} czaty` : 'Czat usunięty', variant: 'info' }); }, 220); } catch (e) { /* ignore */ }
+                // clear pending deletes
+                try { chatsToDelete.forEach(id => removePendingDelete(id)); } catch (e) { /* ignore */ }
             } catch (error) {
                 console.error("Błąd podczas usuwania czatów:", error);
-                // rollback UI + show compact error toast
+                // rollback UI
                 try { setChats(prev); } catch (e) { /* ignore */ }
-                showMessage({ message: 'Usuwanie nie powiodło się', description: 'Nie udało się usunąć wybranych czatów — przywrócono listę.', duration: 4000, position: 'bottom', floating: true, backgroundColor: themeColors.danger + 'EE', color: '#fff', style: { alignSelf: 'center', minWidth: 260, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16 } });
+                // clear pending deletes on error
+                try { chatsToDelete.forEach(id => removePendingDelete(id)); } catch (e) { /* ignore */ }
             }
         };
         
         showModal({
             title: selectedChats.length > 1 ? `Usuń czaty (${selectedChats.length})` : 'Usuń czat',
-            message: 'Czy na pewno chcesz trwale usunąć zaznaczone czaty i wszystkie ich wiadomości? Tej operacji nie można cofnąć.',
+            message: 'Czy na pewno chcesz trwale usunąć zaznaczone czaty? Tej operacji nie można cofnąć.',
             confirmText: 'Usuń',
             cancelText: 'Anuluj',
             onConfirm: performDelete,
@@ -547,9 +602,8 @@ const ActiveChatsScreen = () => {
 
     // Deferred filter change to keep UI responsive on Android
     const handleFilterChange = useCallback((newFilter: FilterType) => {
-        InteractionManager.runAfterInteractions(() => {
-            setFilter(newFilter);
-        });
+        // Avoid React state update here to prevent UI drops during swipe.
+        currentFilterRef.current = newFilter;
     }, []);
 
     const pagerRef = useRef<PagerView | null>(null);
@@ -557,14 +611,120 @@ const ActiveChatsScreen = () => {
     // (no page list refs or pager locking here — keep FlatList behavior closer to defaults)
 
 
-    // Memoize filter buttons to avoid re-rendering them on every screen render
+    // Animated filter bar: measure buttons and animate an indicator under the active one
+    const btnLayouts = React.useRef<Array<{ x: number; width: number }>>([]);
+    const scrollRef = React.useRef<ScrollView | null>(null);
+    const indicatorX = useSharedValue(0);
+    const indicatorW = useSharedValue(0);
+
+    const indicatorStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: indicatorX.value }],
+        width: indicatorW.value
+    }));
+
+    // Animated chip component driven by `currentPageSV` shared value (no React state needed)
+    const AnimatedChip = ({ index, title, onPress }: { index: number; title: string; onPress: () => void; }) => {
+        // Keep chip text fixed; animate only the background overlay (scale + translateY + opacity)
+        const containerStyle = useAnimatedStyle(() => ({ }));
+
+        const overlayStyle = useAnimatedStyle(() => {
+            const d = Math.abs(currentPageSV.value - index);
+            const t = 1 - Math.min(Math.max(d, 0), 1);
+            const translateY = t * 2; // slightly stronger vertical offset
+            const scale = 1 + t * 0.03; // subtle scale to give depth
+            const opacity = 0.95 * t; // slightly stronger max opacity
+            return { opacity, transform: [{ scale }, { translateY }] };
+        });
+
+        const textActiveStyle = useAnimatedStyle(() => {
+            const d = Math.abs(currentPageSV.value - index);
+            const t = 1 - Math.min(Math.max(d, 0), 1);
+            return { opacity: t };
+        });
+        const textInactiveStyle = useAnimatedStyle(() => {
+            const d = Math.abs(currentPageSV.value - index);
+            const t = 1 - Math.min(Math.max(d, 0), 1);
+            return { opacity: 1 - t };
+        });
+
+        return (
+            <AnimatedTouchable
+                onPress={() => {
+                    try { currentPageSV.value = withTiming(index, { duration: ANIM_FADE_DURATION }); } catch (e) {}
+                    try { pagerRef.current?.setPage(index); } catch (e) {}
+                    try { currentFilterRef.current = filters[index].key as FilterType; } catch (e) {}
+                    if (onPress) onPress();
+                }}
+                style={[styles.chip, containerStyle]}
+            >
+                <Text style={[styles.chipText, { color: themeColors.textMuted }]} numberOfLines={1}>{title}</Text>
+                <Animated.View style={[{ position: 'absolute', left: 6, right: 6, top: 6, bottom: 6, borderRadius: 20, backgroundColor: themeColors.tint, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.14, shadowRadius: 5, elevation: 3 }, overlayStyle]} pointerEvents="none" />
+                <AnimatedText style={[styles.chipText, { color: '#ffffff', position: 'absolute', left: 0, right: 0, textAlign: 'center' }, textActiveStyle]} numberOfLines={1}>{title}</AnimatedText>
+            </AnimatedTouchable>
+        );
+    };
+
     const FilterButtons = useMemo(() => {
-        return filters.map((f, i) => (
-            <TouchableOpacity key={f.key} onPress={() => { try { pagerRef.current?.setPage(i); } catch (e) {} handleFilterChange(f.key); }} style={[styles.filterButton, filter === f.key && { backgroundColor: themeColors.tint }]}>
-                <Text style={[styles.filterText, { color: filter === f.key ? 'white' : themeColors.textMuted }]}>{f.title}</Text>
-            </TouchableOpacity>
-        ));
-    }, [filter, themeColors.tint, themeColors.textMuted, handleFilterChange]);
+        return (
+            <ScrollView
+                ref={scrollRef}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={[styles.filterContentContainer, { position: 'relative' }]}
+            >
+                <Animated.View
+                    style={[
+                        {
+                            position: 'absolute',
+                            height: 32,
+                            bottom: 6,
+                            borderRadius: 16,
+                            backgroundColor: themeColors.tint,
+                            left: 0
+                        },
+                        indicatorStyle,
+                        // subtle shadow for the indicator
+                        { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.12, shadowRadius: 4, elevation: 2 }
+                    ]}
+                    pointerEvents="none"
+                />
+                {filters.map((f, i) => (
+                    <TouchableOpacity
+                        key={f.key}
+                        onLayout={(e) => {
+                            const { x, width } = e.nativeEvent.layout;
+                            btnLayouts.current[i] = { x, width };
+                            if (f.key === filter) {
+                                try {
+                                    indicatorX.value = withTiming(x, { duration: ANIM_FADE_DURATION });
+                                    indicatorW.value = withTiming(width, { duration: ANIM_FADE_DURATION });
+                                } catch (e) {}
+                            }
+                        }}
+                        onPress={() => { try { pagerRef.current?.setPage(i); } catch (e) {} handleFilterChange(f.key); }}
+                        style={[styles.filterButton, filter === f.key && { backgroundColor: 'transparent' }]}
+                    >
+                        <Text style={[styles.filterText, { color: filter === f.key ? 'white' : themeColors.textMuted }]}>{f.title}</Text>
+                    </TouchableOpacity>
+                ))}
+            </ScrollView>
+        );
+    }, [filter, themeColors.tint, themeColors.textMuted, handleFilterChange, indicatorStyle]);
+
+    // animate indicator and scroll to make it visible when filter changes
+    useEffect(() => {
+        const idx = filters.findIndex(f => f.key === filter);
+        const layout = btnLayouts.current[idx];
+        if (layout) {
+            try {
+                indicatorX.value = withTiming(layout.x, { duration: ANIM_FADE_DURATION });
+                indicatorW.value = withTiming(layout.width, { duration: ANIM_FADE_DURATION });
+                // scroll so the button is visible (try to center a bit)
+                const scrollTo = Math.max(0, layout.x - 40);
+                try { scrollRef.current?.scrollTo({ x: scrollTo, animated: true }); } catch (e) {}
+            } catch (e) {}
+        }
+    }, [filter]);
 
     // Create a fresh Gesture instance per page to avoid reusing the same Gesture
     // (prevent "Handler with tag X already exists" errors).
@@ -604,6 +764,11 @@ const ActiveChatsScreen = () => {
         } catch (e) { return () => { mounted = false; removeAnimationListener(onChange); }; }
     }, []);
 
+    const headerOpacityAnim = useSharedValue(selectionMode ? 1 : 0);
+    useEffect(() => { headerOpacityAnim.value = withTiming(selectionMode ? 1 : 0, { duration: ANIM_FADE_DURATION }); }, [selectionMode]);
+    const defaultHeaderStyle = useAnimatedStyle(() => ({ opacity: 1 - headerOpacityAnim.value }));
+    const selectionHeaderStyle = useAnimatedStyle(() => ({ opacity: headerOpacityAnim.value }));
+
     return (
         <TabTransition tabIndex={0} quick={true} style={{ flex: 1, backgroundColor: themeColors.background }}>
             {modalConfig?.title && modalConfig?.confirmText && (
@@ -624,33 +789,49 @@ const ActiveChatsScreen = () => {
                 }}
               />
             )}
-            <View style={styles.headerArea}>
-                 <View style={[styles.headerWrapper, { opacity: !selectionMode ? 1 : 0 }]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
-                    <View style={[styles.headerContainer, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
-                                                <Text style={[styles.headerTitle, { color: themeColors.text }]}>Livechat</Text>
-                                                <Text style={[styles.headerSubtitle, { color: themeColors.textMuted }]}>Witaj, {displayName || 'Użytkowniku'}</Text>
-                                                {/* test button removed */}
+            <StatusBar backgroundColor="#2b2f33" barStyle="light-content" />
+            <View style={[styles.headerSlot, { backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}>
+                <Animated.View style={[styles.headerLayer, { zIndex: 6 }, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
+                    <View style={[styles.headerContent, { paddingTop: 6, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}> 
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.headerTitle, { color: '#ffffff' }]}>Livechat</Text>
+                        </View>
+                        <View style={{ marginLeft: 12 }}>
+                            <Text style={[styles.headerSubtitle, { color: 'rgba(255,255,255,0.85)', textAlign: 'right' }]}>Witaj, <Text style={{ color: '#0b84ff' }}>{displayName || 'Użytkowniku'}</Text></Text>
+                        </View>
                     </View>
-                </View>
-                <View style={[styles.headerWrapper, { opacity: selectionMode ? 1 : 0 }]} pointerEvents={selectionMode ? 'auto' : 'none'}>
-                    <View style={[styles.headerContainer, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
-                        <TouchableOpacity onPress={exitSelectionMode}><Text style={{ color: themeColors.tint, fontSize: 17, fontWeight: '600' }}>Anuluj</Text></TouchableOpacity>
-                        <Text style={[styles.selectionTitle, {color: themeColors.text}]}>{`Zaznaczono: ${selectedChats.length}`}</Text>
-                        <TouchableOpacity onPress={handleDeleteSelected} disabled={selectedChats.length === 0}>
-                            <Ionicons name="trash-outline" size={24} color={selectedChats.length > 0 ? themeColors.danger : themeColors.textMuted} />
-                        </TouchableOpacity>
+                    
+                </Animated.View>
+                <Animated.View style={[styles.headerLayer, { zIndex: 6 }, selectionHeaderStyle]} pointerEvents={selectionMode ? 'auto' : 'none'}>
+                    <View style={[styles.headerContent, { justifyContent: 'space-between', paddingTop: 0, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center' }]}> 
+                        <Pressable onPress={exitSelectionMode} style={{ padding: 8, marginTop: -36 }}>
+                            <Ionicons name="arrow-back" size={24} color={'#ffffff'} />
+                        </Pressable>
+                        <Text style={[styles.selectionTitle, { color: '#ffffff', textAlign: 'center', marginTop: -36 }]}>{`Zaznaczono: ${selectedChats.length}`}</Text>
+                        <Pressable onPress={handleDeleteSelected} disabled={selectedChats.length === 0} style={{ padding: 8, marginTop: -36 }}>
+                            <Ionicons name="trash-outline" size={24} color={selectedChats.length > 0 ? themeColors.danger : 'rgba(255,255,255,0.7)'} />
+                        </Pressable>
                     </View>
-                </View>
-            </View>
-
-            {/* Always render filters to avoid list shifting when entering/exiting selection mode. */}
-            <View style={[styles.filterOuterContainer, { borderBottomColor: themeColors.border, opacity: selectionMode ? 0.85 : 1 }]} pointerEvents={selectionMode ? 'none' : 'auto'}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterContentContainer}>
-                    {FilterButtons}
-                </ScrollView>
+                </Animated.View>
             </View>
 
             <View style={{ flex: 1 }} onLayout={(e) => { containerHeightRef.current = e.nativeEvent.layout.height; const h = pageContentHeights.current[currentPageSV.value] || 0; const cs = h > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); }}>
+                <View style={[styles.contentCard, { backgroundColor: themeColors.card, marginTop: -48, paddingTop: 6 }]}> 
+                    <View style={{ paddingHorizontal: 10 }}>
+                        <View style={[styles.filterChipsRow, { paddingBottom: 6, position: 'relative' }]}> 
+                            {/* Animated sliding highlight removed per request — keep chipActive visual only */}
+                            {filters.map((f, i) => (
+                                    <AnimatedChip
+                                        key={f.key}
+                                        index={i}
+                                        title={f.title}
+                                        onPress={() => { try { handleFilterChange(f.key as FilterType); } catch (e) {} }}
+                                    />
+                                ))}
+                            <View pointerEvents="none" style={[styles.filterSeparator, { backgroundColor: lightenHex(themeColors.border, 0.76) }]} />
+                        </View>
+                        {/* separator removed as requested */}
+                    </View>
                 {loading && allChats.length === 0 ? (
                     <ActivityIndicator style={{ flex: 1, justifyContent: 'center' }} />
                 ) : (
@@ -664,12 +845,26 @@ const ActiveChatsScreen = () => {
                             onPageSelected={(e) => {
                                 const pos = e.nativeEvent.position;
                                 const k = filters[pos]?.key as FilterType | undefined;
-                                currentPageSV.value = pos;
                                 const h = pageContentHeights.current[pos] || 0;
                                 const cs = h > containerHeightRef.current;
                                 canScrollSV.value = cs;
-                                setCanScroll(cs);
-                                if (k) setFilter(k);
+                                // Update shared value and mutable ref only (no React setState) to avoid jank
+                                try { currentPageSV.value = pos; } catch (e) {}
+                                if (k) { currentFilterRef.current = k; }
+                            }}
+                            onPageScroll={(e) => {
+                                try {
+                                    const { position, offset } = e.nativeEvent as any;
+                                    const floatPos = position + (offset || 0);
+                                    const idx = Math.floor(floatPos);
+                                    const t = floatPos - idx;
+                                    const a = btnLayouts.current[idx] || { x: 0, width: 0 };
+                                    const b = btnLayouts.current[idx + 1] || a;
+                                    const lerp = (v1: number, v2: number, u: number) => v1 + (v2 - v1) * u;
+                                    const x = lerp(a.x ?? 0, b.x ?? 0, t);
+                                    const w = lerp(a.width ?? 0, b.width ?? 0, t);
+                                    try { indicatorX.value = x; indicatorW.value = w; } catch (e) {}
+                                } catch (e) { /* ignore */ }
                             }}
                         >
                             {filters.map((f, pageIndex) => {
@@ -689,14 +884,15 @@ const ActiveChatsScreen = () => {
                                                 // Scrollable lists MUST be pure native scroll — no gesture wrappers, no jelly logic.
                                                 return (
                                                     <View style={{ flex: 1 }}>
-                                                        <FlatList<Chat>
-                                                            ref={listRef as any}
-                                                            data={pageData}
-                                                            scrollEnabled={true}
-                                                            decelerationRate="fast"
-                                                            overScrollMode="auto"
-                                                            bounces={true}
-                                                            alwaysBounceVertical={true}
+                                                        <NativeViewGestureHandler simultaneousHandlers={pagerRef}>
+                                                            <FlatList<Chat>
+                                                                ref={listRef as any}
+                                                                data={pageData}
+                                                                scrollEnabled={true}
+                                                                decelerationRate="fast"
+                                                                overScrollMode="auto"
+                                                                bounces={true}
+                                                                alwaysBounceVertical={true}
                                                             keyExtractor={(item) => item.id}
                                                             renderItem={({ item, index }) => (
                                                                 <ChatListItem
@@ -716,13 +912,14 @@ const ActiveChatsScreen = () => {
                                                             ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
                                                             ListFooterComponent={isLoadingMore ? (<ActivityIndicator style={{ marginVertical: 12 }} />) : null}
                                                             style={{ backgroundColor: themeColors.background }}
-                                                            contentContainerStyle={{ paddingTop: 10 }}
+                                                            contentContainerStyle={{ paddingTop: 0 }}
                                                             extraData={selectionMode}
                                                             onEndReached={() => { if (hasMore) loadMore(); }}
                                                             onEndReachedThreshold={0.5}
                                                             onContentSizeChange={(_, h) => { pageContentHeights.current[pageIndex] = h; if (currentPageSV.value === pageIndex) { const cs = h > containerHeightRef.current; canScrollSV.value = cs; setCanScroll(cs); } }}
                                                             scrollEventThrottle={16}
                                                         />
+                                                        </NativeViewGestureHandler>
                                                     </View>
                                                 );
                                             })()
@@ -757,7 +954,7 @@ const ActiveChatsScreen = () => {
                                                         windowSize={5}
                                                         ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 40, color: themeColors.textMuted }}>Brak czatów w tej kategorii</Text>}
                                                         style={{ backgroundColor: themeColors.background }}
-                                                        contentContainerStyle={{ paddingTop: 10 }}
+                                                        contentContainerStyle={{ paddingTop: 0 }}
                                                         extraData={selectionMode}
                                                         onEndReached={() => { if (hasMore) loadMore(); }}
                                                         onEndReachedThreshold={0.5}
@@ -774,6 +971,7 @@ const ActiveChatsScreen = () => {
                         </PagerView>
                         </View>
                 )}
+                </View>
             </View>
 
         </TabTransition>

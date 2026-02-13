@@ -63,7 +63,7 @@ export const FormProvider: React.FC<{children: React.ReactNode}> = ({ children }
     const q = query(formsCollection, orderBy('createdAt', 'desc'));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const newForms = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ContactForm));
+      const newForms = snapshot.docs.map(doc => ({ ...(doc.data() as any), id: doc.id } as ContactForm));
       const onFormsScreen = segments.join('/').includes('(tabs)/forms');
       const onSpecificFormScreen = segments.join('/').includes('forms/');
 
@@ -75,26 +75,32 @@ export const FormProvider: React.FC<{children: React.ReactNode}> = ({ children }
       }
 
       snapshot.docChanges().forEach(change => {
-        if (change.type === 'added' && !change.doc.metadata.hasPendingWrites) {
-          if (!onFormsScreen && !onSpecificFormScreen) {
-              // Suppress toasts that happen immediately after a navigation change —
-              // these are the "ghost" notifications you reported when spamming
-              // enter/back. Allow only when segments have been stable for >= 300ms.
-              const now = Date.now();
-              if (!shouldShowToastAfterSegmentChange(lastSegmentsChangeRef.current, now, 300)) {
-                if ((global as any).__DEV__) console.debug('FormProvider: suppressed transient form toast due to recent navigation');
-                return; // skip this change
-              }
+        const docId = change.doc.id;
+        const data = change.doc.data() as ContactForm;
 
-              const newFormData = change.doc.data();
+        if (change.type === 'added') {
+          const newForm = ({ ...(data as any), id: docId } as ContactForm);
+          setForms(prev => {
+            // replace if already present, otherwise insert at the top (query is desc by createdAt)
+            if (prev.some(f => f.id === docId)) return prev.map(f => f.id === docId ? newForm : f);
+            return [newForm, ...prev];
+          });
+
+          // show notification only for server-confirmed docs (not pending writes)
+          if (!change.doc.metadata.hasPendingWrites && !onFormsScreen && !onSpecificFormScreen) {
+            const now = Date.now();
+            if (!shouldShowToastAfterSegmentChange(lastSegmentsChangeRef.current, now, 300)) {
+              if ((global as any).__DEV__) console.debug('FormProvider: suppressed transient form toast due to recent navigation');
+            } else {
+              const newFormData = data;
               showMessage({
                 message: "Nowy Formularz",
                 description: `Od: ${newFormData.userInfo.contact}`,
                 duration: 5000,
-                onPress: () => { router.push((`/forms/${change.doc.id}`) as any); },
+                onPress: () => { router.push((`/forms/${docId}`) as any); },
                 floating: true,
                 hideOnPress: true,
-                chatId: change.doc.id,
+                chatId: docId,
                 style: {
                   backgroundColor: theme === 'light' ? 'rgba(242, 242, 247, 0.97)' : 'rgba(28, 28, 30, 0.97)',
                   borderRadius: 20,
@@ -116,7 +122,13 @@ export const FormProvider: React.FC<{children: React.ReactNode}> = ({ children }
                 ),
               });
               setLoading(false);
+            }
           }
+        } else if (change.type === 'modified') {
+          const updated = ({ ...(data as any), id: docId } as ContactForm);
+          setForms(prev => prev.map(f => (f.id === docId ? updated : f)));
+        } else if (change.type === 'removed') {
+          setForms(prev => prev.filter(f => f.id !== docId));
         }
       });
 

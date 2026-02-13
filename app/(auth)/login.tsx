@@ -1,7 +1,7 @@
 
 import { Colors } from '@/constants/theme';
 import { auth } from '@/lib/firebase';
-import { showMessage } from '@/lib/showMessage';
+import toast from '@/lib/toastController';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { signInWithEmailAndPassword } from 'firebase/auth';
@@ -22,7 +22,6 @@ const LoginScreen = () => {
     if (loading) return; // Zabezpieczenie przed wielokrotnym kliknięciem
 
     if (!email || !password) {
-        showMessage({ message: 'Błąd', description: 'Proszę wypełnić oba pola.', type: 'danger', position: 'bottom', floating: true, backgroundColor: themeColors.danger, color: '#fff', style: { borderRadius: 8, marginHorizontal: 12, paddingVertical: 8 } });
       return;
     }
 
@@ -35,7 +34,7 @@ const LoginScreen = () => {
       if (error.code === 'auth/invalid-email') {
         errorMessage = 'Proszę podać poprawny adres e-mail.';
       }
-      showMessage({ message: 'Logowanie nieudane', description: errorMessage, type: 'danger', position: 'bottom', floating: true, backgroundColor: themeColors.danger, color: '#fff', style: { borderRadius: 8, marginHorizontal: 12, paddingVertical: 8 } });
+      try { toast.show({ text: errorMessage, variant: 'error' }); } catch (e) { /* ignore */ }
     } finally {
       setLoading(false);
     }

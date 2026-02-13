@@ -4,11 +4,15 @@ import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { usePresence } from '@/hooks/usePresence';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import * as Notifications from 'expo-notifications';
-import { Slot, useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter, useSegments } from 'expo-router';
 // Dev-only: import test screen to allow bypassing app wrappers when debugging overscroll
+import BottomToast from '@/components/BottomToast';
+import { Colors } from '@/constants/theme';
+import * as NavigationBar from 'expo-navigation-bar';
 import { useEffect } from 'react';
-import { Platform, UIManager } from 'react-native';
+import { Platform, UIManager, useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { ChatProvider } from './contexts/ChatProvider';
 import { FormProvider } from './contexts/FormProvider';
@@ -33,6 +37,8 @@ const InitialLayout = () => {
     }
   }, [user, loading, segments, router]);
 
+  // Sonner/Toast removed per request
+
   // Enable LayoutAnimation on Android for smooth layout transitions
   useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -53,12 +59,28 @@ const InitialLayout = () => {
     return () => subscription.remove();
   }, [router]);
 
-  return <Slot />;
+  return (
+    // Keep root Stack mounted so Android does not detach inactive screens.
+    <Stack screenOptions={{ detachInactiveScreens: false, freezeOnBlur: false, headerShown: false } as any} />
+  );
 };
 
 const RootLayout = () => {
+  const scheme = useColorScheme() ?? 'light';
+  const themeColors = Colors[scheme];
+
+  useEffect(() => {
+    if (Platform.OS === 'android' && NavigationBar && typeof NavigationBar.setBackgroundColorAsync === 'function') {
+      try {
+        NavigationBar.setBackgroundColorAsync(themeColors.background);
+        NavigationBar.setButtonStyleAsync(scheme === 'light' ? 'dark' : 'light');
+      } catch (e) { /* ignore */ }
+    }
+  }, [scheme, themeColors]);
   // Toggle this to `true` during debugging to render `TestOverscroll` without providers/wrappers.
   const DEV_BYPASS_TEST_OVERSCROLL = false && (global as any).__DEV__;
+
+  // sonnerBridge removed per request; no bridge registration
 
   if (DEV_BYPASS_TEST_OVERSCROLL) {
     return (
@@ -71,29 +93,34 @@ const RootLayout = () => {
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <AuthProvider>
-        <SessionProvider>
-          <ChatProvider>
-            <FormProvider>
-              <NotificationProvider>
-                <SafeAreaProvider>
-                    <SafeAreaView style={{ flex: 1 }}>
-                      { (global as any).__DEV__ ? (
-                        <DebugProvider>
+    <>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <AuthProvider>
+          <SessionProvider>
+            <ChatProvider>
+              <FormProvider>
+                <NotificationProvider>
+                  <SafeAreaProvider>
+                    <KeyboardProvider>
+                      <SafeAreaView style={{ flex: 1 }}>
+                        { (global as any).__DEV__ ? (
+                          <DebugProvider>
+                            <InitialLayout />
+                          </DebugProvider>
+                        ) : (
                           <InitialLayout />
-                        </DebugProvider>
-                      ) : (
-                        <InitialLayout />
-                      ) }
-                    </SafeAreaView>
-                </SafeAreaProvider>
-              </NotificationProvider>
-            </FormProvider>
-          </ChatProvider>
-        </SessionProvider>
-      </AuthProvider>
-    </GestureHandlerRootView>
+                        ) }
+                      </SafeAreaView>
+                    </KeyboardProvider>
+                  </SafeAreaProvider>
+                </NotificationProvider>
+              </FormProvider>
+            </ChatProvider>
+          </SessionProvider>
+        </AuthProvider>
+      </GestureHandlerRootView>
+      <BottomToast />
+    </>
   );
 }
 
