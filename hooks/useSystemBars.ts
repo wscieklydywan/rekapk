@@ -7,7 +7,7 @@ export function useDarkBars(backgroundColor = '#000000') {
     useCallback(() => {
       try { RNStatusBar.setBarStyle('light-content', false); } catch (e) {}
       if (Platform.OS === 'android') {
-        try { RNStatusBar.setBackgroundColor(backgroundColor, false); } catch (e) {}
+        try { RNStatusBar.setBackgroundColor('transparent', false); } catch (e) {}
         // navigation bar is intentionally not changed per-screen; global color managed in layout
       }
     }, [backgroundColor])
@@ -19,7 +19,7 @@ export function useLightBars(backgroundColor = '#f6f6f6') {
     useCallback(() => {
       try { RNStatusBar.setBarStyle('dark-content', false); } catch (e) {}
       if (Platform.OS === 'android') {
-        try { RNStatusBar.setBackgroundColor(backgroundColor, false); } catch (e) {}
+        try { RNStatusBar.setBackgroundColor('transparent', false); } catch (e) {}
         // navigation bar is intentionally not changed per-screen; global color managed in layout
       }
     }, [backgroundColor])
