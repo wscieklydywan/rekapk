@@ -1,11 +1,13 @@
 import TabTransition from '@/components/TabTransition';
 import { Colors } from '@/constants/theme';
+import { useDarkBars } from '@/hooks/useSystemBars';
 import React, { useState } from 'react';
-import { FlatList, StatusBar, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { FlatList, StyleSheet, Text, useColorScheme, View } from 'react-native';
 
 const TestScreen = () => {
   const theme = useColorScheme() ?? 'light';
   const themeColors = Colors[theme];
+  useDarkBars('#2b2f33');
   const [selected, setSelected] = useState(0);
 
   const pills = ['Browsing', 'Queued', 'Chatting', 'Supervising'];
@@ -45,7 +47,7 @@ const TestScreen = () => {
 
   return (
     <TabTransition tabIndex={0} quick style={{ flex: 1, backgroundColor: themeColors.background }}>
-      <StatusBar backgroundColor="#2b2f33" barStyle="light-content" />
+      { /* focus-based system bars enabled */ }
        <View style={[styles.headerSlot, { backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}>
         <View style={styles.headerLayer}>
           <View style={styles.headerContent}>

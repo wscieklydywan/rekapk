@@ -6,6 +6,7 @@ import { addAnimationListener, getAnimationsEnabled, removeAnimationListener } f
 import { ANIM_FADE_DURATION, ANIM_TRANSLATE_DURATION } from '@/constants/animations';
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/useAuth';
+import { useDarkBars } from '@/hooks/useSystemBars';
 import { db } from '@/lib/firebase';
 import { deleteCollectionInBatches } from '@/lib/firestore-utils';
 import { addPendingDelete, removePendingDelete } from '@/lib/pendingDeletes';
@@ -15,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { collection, deleteDoc, doc } from 'firebase/firestore';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, FlatList, PixelRatio, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, FlatList, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { Gesture, GestureDetector, NativeViewGestureHandler } from 'react-native-gesture-handler';
 import PagerView from 'react-native-pager-view';
 import Animated, { cancelAnimation, Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
@@ -331,6 +332,7 @@ const ActiveChatsScreen = () => {
     const theme = useColorScheme() ?? 'light';
     const themeColors = useMemo(() => ({ ...Colors[theme], selection: theme === 'light' ? '#E8F0FE' : '#2A2A3D', danger: '#FF3B30' }), [theme]);
     const subtleBorder = lightenHex(themeColors.border, 0.80);
+    useDarkBars('#2b2f33');
     const { displayName } = useAuth();
     const navigation = useNavigation();
     const router = useRouter();
@@ -789,7 +791,7 @@ const ActiveChatsScreen = () => {
                 }}
               />
             )}
-            <StatusBar backgroundColor="#2b2f33" barStyle="light-content" />
+            {/* status bar handled via focus hook */}
             <View style={[styles.headerSlot, { backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}>
                 <Animated.View style={[styles.headerLayer, { zIndex: 6 }, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
                     <View style={[styles.headerContent, { paddingTop: 6, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}> 

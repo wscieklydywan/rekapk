@@ -3,12 +3,13 @@ import AnimatedModal from '@/components/AnimatedModal';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/useAuth';
+import { useLightBars } from '@/hooks/useSystemBars';
 import { Ionicons } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
 import { getAuth, signOut } from 'firebase/auth';
 import { doc, getFirestore, onSnapshot, updateDoc } from 'firebase/firestore';
 import React, { useEffect, useMemo, useState } from 'react';
-import { AppState, KeyboardAvoidingView, Platform, ScrollView, StatusBar, StyleSheet, Switch, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { AppState, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 
 import { getAnimationsEnabled, setAnimationsEnabled } from '@/components/animationPreference';
@@ -58,6 +59,7 @@ const SettingsScreen = () => {
   const { user } = useAuth();
   const theme = useColorScheme() ?? 'light';
   const themeColors = Colors[theme];
+  useLightBars();
   const auth = getAuth();
   const db = getFirestore();
 
@@ -212,7 +214,7 @@ const SettingsScreen = () => {
 
   return (
     <TabTransition tabIndex={3} quick={true} style={{ flex: 1, backgroundColor: '#f6f6f6' }}>
-      <StatusBar backgroundColor="#f6f6f6" barStyle="dark-content" />
+      { /* focus-based system bars (hook called in component body) */ }
 
       <ConfirmationModal visible={logoutModalVisible} onClose={() => setLogoutModalVisible(false)} title="Wylogowanie" message="Czy na pewno chcesz się wylogować?" confirmText="Wyloguj się" cancelText="Anuluj" onConfirm={handleLogout} variant="destructive" />
       <SelectionModal visible={modeSelectionModalVisible} onClose={() => setModeSelectionModalVisible(false)} title="Wybierz tryb powiadomień" options={selectionOptions} onSelect={handleModeUpdate} currentValue={notificationMode} />

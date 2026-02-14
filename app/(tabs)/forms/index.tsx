@@ -4,12 +4,13 @@ import { ConfirmationModal } from '@/components/ConfirmationModal';
 import TabTransition from '@/components/TabTransition';
 import { ANIM_FADE_DURATION, ANIM_TRANSLATE_DURATION } from '@/constants/animations';
 import { Colors } from '@/constants/theme';
+import { useDarkBars } from '@/hooks/useSystemBars';
 import { useTapHighlight } from '@/hooks/useTapHighlight';
 import { ContactForm } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, StatusBar, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { cancelAnimation, Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
@@ -165,6 +166,7 @@ const FormsListScreen = () => {
     const theme = useColorScheme() ?? 'light';
     const themeColors = { ...Colors[theme], selection: theme === 'light' ? '#E8F0FE' : '#2A2A3D', danger: '#FF3B30' };
     const subtleBorder = lightenHex(themeColors.border, 0.80);
+    useDarkBars('#2b2f33');
     const { forms, loading, setForms } = useFormContext();
     const navigation = useNavigation();
 
@@ -383,7 +385,7 @@ const FormsListScreen = () => {
                 }}
               />
             )}
-            <StatusBar backgroundColor="#2b2f33" barStyle="light-content" />
+            {/* status bar handled via focus hook */}
             <View style={[styles.headerSlot, { backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}> 
                 <Animated.View style={[styles.headerLayer, { zIndex: 6 }, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
                     <View style={[styles.headerContent, { paddingTop: 6, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}> 

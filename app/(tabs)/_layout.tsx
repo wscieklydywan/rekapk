@@ -3,9 +3,10 @@ import ChatTabIcon from '@/components/ChatTabIcon'; // Nowy import
 import FormTabIcon from '@/components/FormTabIcon'; // Nowy import
 import { Colors } from '@/constants/theme';
 import { Ionicons } from '@expo/vector-icons';
+import * as NavigationBar from 'expo-navigation-bar';
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { PixelRatio, useColorScheme } from 'react-native';
+import { PixelRatio, Platform, useColorScheme } from 'react-native';
 
 export default function TabLayout() {
   const theme = useColorScheme() ?? 'light';
@@ -81,4 +82,12 @@ export default function TabLayout() {
       />
     </Tabs>
   );
+}
+
+// Ensure Android navigation bar is white with dark buttons app-wide
+if (Platform.OS === 'android') {
+  try {
+    NavigationBar.setBackgroundColorAsync('#ffffff').catch(() => {});
+    NavigationBar.setButtonStyleAsync('dark').catch(() => {});
+  } catch (e) {}
 }
