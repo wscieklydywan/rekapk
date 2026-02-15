@@ -1,6 +1,7 @@
 
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { Colors } from '@/constants/theme';
+import { useLightBars } from '@/hooks/useSystemBars';
 import { db } from '@/lib/firebase';
 import { deleteCollectionInBatches } from '@/lib/firestore-utils';
 import toast from '@/lib/toastController';
@@ -11,6 +12,7 @@ import { collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc } fro
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import Animated, { Easing, FadeIn, FadeOut, SlideInRight, SlideOutRight } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // animation timings chosen to match Conversation smooth feel
 const FORM_FADE_IN_DUR = 100;
 const FORM_FADE_OUT_DUR = 90;
@@ -47,6 +49,10 @@ const FormDetailScreen = () => {
     const theme = useColorScheme() ?? 'light';
     const themeColors = { ...Colors[theme], danger: '#FF3B30' };
     const { totalUnreadCount } = useFormContext();
+    useLightBars();
+    const insets = useSafeAreaInsets();
+    const headerBase = 64;
+    const headerHeight = headerBase + insets.top;
 
     const [form, setForm] = useState<ContactForm | null>(null);
     const [messages, setMessages] = useState<FormMessage[]>([]);
@@ -125,7 +131,7 @@ const FormDetailScreen = () => {
         <Animated.View entering={FadeIn.duration(FORM_FADE_IN_DUR).easing(Easing.out(Easing.cubic))} exiting={FadeOut.duration(FORM_FADE_OUT_DUR).easing(Easing.in(Easing.cubic))} style={{ flex: 1 }}>
             <Animated.View entering={SlideInRight.duration(FORM_SLIDE_IN_DUR).easing(Easing.out(Easing.cubic))} exiting={SlideOutRight.duration(FORM_SLIDE_OUT_DUR).easing(Easing.in(Easing.cubic))} style={{ flex: 1 }}>
                 <View style={[styles.container, { backgroundColor: themeColors.background }]}>
-            <View style={[styles.header, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
+            <View style={[styles.header, { height: headerHeight, paddingTop: 12 + insets.top, backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon}>
                     <Ionicons name="arrow-back" size={24} color={themeColors.text} />
                      {showBackButtonBadge && (

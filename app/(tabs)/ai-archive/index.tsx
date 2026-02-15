@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { cancelAnimation, Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Lighten a hex color by moving it towards white by `amount` (0..1).
 const lightenHex = (hex: string, amount = 0.6) => {
@@ -143,6 +144,9 @@ const AiArchiveScreen = () => {
     const subtleBorder = lightenHex(themeColors.border, 0.80);
     useDarkBars('#2b2f33');
     const navigation = useNavigation();
+    const insets = useSafeAreaInsets();
+    const headerBase = 110;
+    const headerHeight = headerBase + insets.top;
 
     const [allConversations, setAllConversations] = useState<AiConversation[]>([]);
     const [loading, setLoading] = useState(true);
@@ -384,9 +388,9 @@ const AiArchiveScreen = () => {
               />
             )}
             {/* status bar handled via focus hook */}
-            <View style={[styles.headerSlot, { backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}> 
+            <View style={[styles.headerSlot, { height: headerHeight, backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}> 
                 <Animated.View style={[styles.headerLayer, { zIndex: 10 }, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
-                    <View style={[styles.headerContent, { paddingTop: 6, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}> 
+                    <View style={[styles.headerContent, { paddingTop: 6 + insets.top, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}> 
                         <View style={{ flex: 1 }}>
                             <Text style={[styles.headerTitle, { color: '#ffffff' }]}>Archiwum AI</Text>
                         </View>

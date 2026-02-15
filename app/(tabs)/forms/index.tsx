@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { cancelAnimation, Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { db } from '@/lib/firebase';
 import { deleteCollectionInBatches } from '@/lib/firestore-utils';
@@ -167,6 +168,9 @@ const FormsListScreen = () => {
     const themeColors = { ...Colors[theme], selection: theme === 'light' ? '#E8F0FE' : '#2A2A3D', danger: '#FF3B30' };
     const subtleBorder = lightenHex(themeColors.border, 0.80);
     useDarkBars('#2b2f33');
+    const insets = useSafeAreaInsets();
+    const headerBase = 110;
+    const headerHeight = headerBase + insets.top;
     const { forms, loading, setForms } = useFormContext();
     const navigation = useNavigation();
 
@@ -386,9 +390,9 @@ const FormsListScreen = () => {
               />
             )}
             {/* status bar handled via focus hook */}
-            <View style={[styles.headerSlot, { backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}> 
+            <View style={[styles.headerSlot, { height: headerHeight, backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}> 
                 <Animated.View style={[styles.headerLayer, { zIndex: 6 }, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
-                    <View style={[styles.headerContent, { paddingTop: 6, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}> 
+                    <View style={[styles.headerContent, { paddingTop: 6 + insets.top, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}> 
                         <View style={{ flex: 1 }}>
                             <Text style={[styles.headerTitle, { color: '#ffffff' }]}>Formularze</Text>
                         </View>

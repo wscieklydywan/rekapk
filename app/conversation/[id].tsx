@@ -3,6 +3,7 @@ import { useChatContext } from '@/app/contexts/ChatProvider';
 
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/useAuth';
+import { useLightBars } from '@/hooks/useSystemBars';
 import { db } from '@/lib/firebase';
 import { deleteCollectionInBatches } from '@/lib/firestore-utils';
 import { Chat, Message, User } from '@/schemas';
@@ -316,6 +317,7 @@ const ConversationScreen = () => {
     const theme = useColorScheme() ?? 'light';
     const themeColors = Colors[theme];
     const insets = useSafeAreaInsets();
+    useLightBars();
 
     // Use react-native-keyboard-controller (JS) + Reanimated shared value for smooth native-synced frames
     const keyboardOffset = useSharedValue(0);
@@ -1781,7 +1783,7 @@ const ConversationScreen = () => {
                         </View>
                 </AnimatedModal>
 
-                <View style={[styles.header, { borderBottomColor: themeColors.border, backgroundColor: themeColors.background, zIndex: 50, elevation: 6 }]}>
+                <View style={[styles.header, { height: 60 + (insets?.top || 0), paddingTop: (insets?.top || 0), borderBottomColor: themeColors.border, backgroundColor: themeColors.background, zIndex: 50, elevation: 6 }]}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon}>
                         <Ionicons name="arrow-back" size={24} color={themeColors.text} />
                         {showBackButtonBadge && <View style={[styles.backButtonBadge, { backgroundColor: themeColors.danger, borderColor: themeColors.background }]} />}

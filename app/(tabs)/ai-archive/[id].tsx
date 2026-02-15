@@ -1,6 +1,7 @@
 
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { Colors } from '@/constants/theme';
+import { useLightBars } from '@/hooks/useSystemBars';
 import { db } from '@/lib/firebase';
 import { deleteCollectionInBatches } from '@/lib/firestore-utils';
 import toast from '@/lib/toastController';
@@ -11,6 +12,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { TouchableOpacity } from 'react-native-gesture-handler';
 import Animated, { Easing, FadeIn, FadeOut, SlideInRight, SlideOutRight } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // animation timings chosen to match Conversation smooth feel
 const AI_FADE_IN_DUR = 100;
 const AI_FADE_OUT_DUR = 90;
@@ -77,6 +79,10 @@ const AiConversationDetailScreen = () => {
     const theme = useColorScheme() ?? 'light';
     const themeColors = { ...Colors[theme], danger: '#FF3B30' };
     const navigation = useNavigation();
+    useLightBars();
+    const insets = useSafeAreaInsets();
+    const headerBase = 64;
+    const headerHeight = headerBase + insets.top;
     const router = useRouter();
     const { id } = useLocalSearchParams<{ id: string }>(); 
 
@@ -263,9 +269,9 @@ const AiConversationDetailScreen = () => {
                             />
                         )}
             {/* Header */}
-                <View style={[styles.headerSlot, { backgroundColor: themeColors.card ?? themeColors.background, borderBottomColor: themeColors.border }]}> 
+                <View style={[styles.headerSlot, { height: headerHeight, backgroundColor: themeColors.card ?? themeColors.background, borderBottomColor: themeColors.border }]}> 
                     <Animated.View style={[styles.headerLayer]} pointerEvents={'auto'}>
-                        <View style={[styles.headerContent]}> 
+                        <View style={[styles.headerContent, { paddingTop: 28 + insets.top }]}> 
                         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
                             <Ionicons name="chevron-back" size={28} color={themeColors.tint} />
                         </TouchableOpacity>

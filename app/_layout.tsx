@@ -9,8 +9,9 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import BottomToast from '@/components/BottomToast';
 import { Colors } from '@/constants/theme';
 import * as NavigationBar from 'expo-navigation-bar';
+import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
-import { Platform, UIManager, useColorScheme, StatusBar } from 'react-native';
+import { Platform, StatusBar, UIManager, useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -18,7 +19,6 @@ import { ChatProvider } from './contexts/ChatProvider';
 import { FormProvider } from './contexts/FormProvider';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { SessionProvider } from './contexts/SessionContext';
-import TestOverscroll from './test-overscroll';
 
 const InitialLayout = () => {
   const { user, loading } = useAuth();
@@ -76,21 +76,10 @@ const RootLayout = () => {
         NavigationBar.setButtonStyleAsync(scheme === 'light' ? 'dark' : 'light');
       } catch (e) { /* ignore */ }
     }
+    // Try to hide any native splash overlay that may remain (no-op if already hidden)
+    try { SplashScreen.hideAsync().catch(() => {}); } catch (e) { /* ignore */ }
   }, [scheme, themeColors]);
-  // Toggle this to `true` during debugging to render `TestOverscroll` without providers/wrappers.
-  const DEV_BYPASS_TEST_OVERSCROLL = false && (global as any).__DEV__;
-
   // sonnerBridge removed per request; no bridge registration
-
-  if (DEV_BYPASS_TEST_OVERSCROLL) {
-    return (
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaView style={{ flex: 1 }}>
-          <TestOverscroll />
-        </SafeAreaView>
-      </GestureHandlerRootView>
-    );
-  }
 
   return (
     <>
@@ -103,7 +92,7 @@ const RootLayout = () => {
                 <NotificationProvider>
                   <SafeAreaProvider>
                     <KeyboardProvider>
-                      <SafeAreaView style={{ flex: 1 }}>
+                      <SafeAreaView style={{ flex: 1 }} edges={[ 'left', 'right', 'bottom' as any ]}>
                         { (global as any).__DEV__ ? (
                           <DebugProvider>
                             <InitialLayout />

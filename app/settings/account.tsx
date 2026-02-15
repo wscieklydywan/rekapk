@@ -5,11 +5,15 @@ import { useRouter } from 'expo-router';
 import { doc, getDoc, getFirestore, updateDoc } from 'firebase/firestore';
 import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const AccountScreen = () => {
   const { user } = useAuth();
   const theme = useColorScheme() ?? 'light';
   const themeColors = Colors[theme];
+  const insets = useSafeAreaInsets();
+  const headerBase = 64;
+  const headerHeight = headerBase + insets.top;
   const router = useRouter();
   const db = getFirestore();
   const [displayName, setDisplayName] = useState(user?.displayName || '');
@@ -60,9 +64,9 @@ const AccountScreen = () => {
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.container, { backgroundColor: '#f6f6f6' }]}> 
-      <View style={[styles.headerSlot, { backgroundColor: '#f6f6f6', borderBottomColor: themeColors.border }]}> 
+      <View style={[styles.headerSlot, { height: headerHeight, backgroundColor: '#f6f6f6', borderBottomColor: themeColors.border }]}> 
         <View style={styles.headerLayer}>
-          <View style={[styles.headerContent, { borderColor: themeColors.border }]}> 
+          <View style={[styles.headerContent, { borderColor: themeColors.border, paddingTop: insets.top }]}> 
             <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
               <Ionicons name="arrow-back" size={22} color={themeColors.tint} />
             </TouchableOpacity>

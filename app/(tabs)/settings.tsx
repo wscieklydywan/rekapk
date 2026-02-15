@@ -11,6 +11,7 @@ import { doc, getFirestore, onSnapshot, updateDoc } from 'firebase/firestore';
 import React, { useEffect, useMemo, useState } from 'react';
 import { AppState, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import Animated from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getAnimationsEnabled, setAnimationsEnabled } from '@/components/animationPreference';
 import { SelectionModal } from '@/components/SelectionModal';
@@ -60,6 +61,9 @@ const SettingsScreen = () => {
   const theme = useColorScheme() ?? 'light';
   const themeColors = Colors[theme];
   useLightBars();
+  const insets = useSafeAreaInsets();
+  const headerBase = 64;
+  const headerHeight = headerBase + insets.top;
   const auth = getAuth();
   const db = getFirestore();
 
@@ -232,9 +236,9 @@ const SettingsScreen = () => {
         </KeyboardAvoidingView>
       </AnimatedModal>
 
-      <View style={[styles.headerSlot, { borderBottomColor: themeColors.border }, hasScrolled ? styles.headerShadow : undefined]}> 
+      <View style={[styles.headerSlot, { height: headerHeight, borderBottomColor: themeColors.border }, hasScrolled ? styles.headerShadow : undefined]}> 
         <Animated.View style={styles.headerLayer}> 
-          <View style={[styles.headerContent, { backgroundColor: '#f6f6f6' }]}> 
+          <View style={[styles.headerContent, { backgroundColor: '#f6f6f6', paddingTop: 12 + insets.top }]}> 
             <Text style={[styles.headerTitle, { color: themeColors.text }]}>Ustawienia</Text>
           </View>
         </Animated.View>

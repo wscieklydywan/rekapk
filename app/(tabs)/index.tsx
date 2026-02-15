@@ -20,6 +20,7 @@ import { AccessibilityInfo, ActivityIndicator, FlatList, PixelRatio, Platform, P
 import { Gesture, GestureDetector, NativeViewGestureHandler } from 'react-native-gesture-handler';
 import PagerView from 'react-native-pager-view';
 import Animated, { cancelAnimation, Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity) as any;
 const AnimatedText = Animated.createAnimatedComponent(Text) as any;
@@ -336,6 +337,9 @@ const ActiveChatsScreen = () => {
     const { displayName } = useAuth();
     const navigation = useNavigation();
     const router = useRouter();
+    const insets = useSafeAreaInsets();
+    const headerBase = 110;
+    const headerHeight = headerBase + insets.top;
     const params = useLocalSearchParams<{ lastFilter?: string }>();
     
     const [filter, setFilter] = useState<FilterType>((params.lastFilter as FilterType) || 'all');
@@ -792,9 +796,9 @@ const ActiveChatsScreen = () => {
               />
             )}
             {/* status bar handled via focus hook */}
-            <View style={[styles.headerSlot, { backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}>
+            <View style={[styles.headerSlot, { height: headerHeight, backgroundColor: '#2b2f33', borderBottomColor: 'transparent' }]}>
                 <Animated.View style={[styles.headerLayer, { zIndex: 6 }, defaultHeaderStyle]} pointerEvents={!selectionMode ? 'auto' : 'none'}>
-                    <View style={[styles.headerContent, { paddingTop: 6, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}> 
+                    <View style={[styles.headerContent, { paddingTop: 6 + insets.top, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}> 
                         <View style={{ flex: 1 }}>
                             <Text style={[styles.headerTitle, { color: '#ffffff' }]}>Livechat</Text>
                         </View>
@@ -805,7 +809,7 @@ const ActiveChatsScreen = () => {
                     
                 </Animated.View>
                 <Animated.View style={[styles.headerLayer, { zIndex: 6 }, selectionHeaderStyle]} pointerEvents={selectionMode ? 'auto' : 'none'}>
-                    <View style={[styles.headerContent, { justifyContent: 'space-between', paddingTop: 0, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center' }]}> 
+                    <View style={[styles.headerContent, { justifyContent: 'space-between', paddingTop: insets.top, paddingBottom: 6, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center' }]}> 
                         <Pressable onPress={exitSelectionMode} style={{ padding: 8, marginTop: -36 }}>
                             <Ionicons name="arrow-back" size={24} color={'#ffffff'} />
                         </Pressable>
