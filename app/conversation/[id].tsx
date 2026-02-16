@@ -24,6 +24,7 @@ import toast from '@/lib/toastController';
 import { useKeyboardHandler } from 'react-native-keyboard-controller';
 import { MenuProvider } from 'react-native-popup-menu';
 import Animated, { Easing, FadeIn, FadeOut, interpolate, SlideInRight, SlideOutRight, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import * as Clipboard from 'expo-clipboard';
 
 const GROUP_THRESHOLD_MINUTES = 3;
 const MESSAGES_LIMIT = 30; // max number of messages to keep in live subscription and persisted to AsyncStorage
@@ -44,6 +45,14 @@ const getInitials = (str?: string) => {
     if (parts.length === 0) return 'U';
     if (parts.length === 1) return parts[0].slice(0,2).toUpperCase();
     return (parts[0][0] + parts[1][0]).toUpperCase();
+};
+
+const copyToClipboard = async (text?: string) => {
+    try {
+        if (!text) return;
+        await Clipboard.setStringAsync(String(text));
+        toast.show('Skopiowano');
+    } catch (e) { /* ignore */ }
 };
 
 const formatMessageTimestamp = (d: Date) => {
@@ -125,14 +134,20 @@ const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins,
         if (isContextMessage) {
             const cleanedText = message.text.replace(/^-+\s*|\s*-+$/g, '').trim();
             return (
-                <View style={styles.dividerContainer}>
-                    <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
-                    <Text style={[styles.dividerText, { color: themeColors.textMuted }]}>{cleanedText}</Text>
-                    <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
-                </View>
+                <Pressable onLongPress={() => copyToClipboard(cleanedText)} style={{ width: '100%' }}>
+                    <View style={styles.dividerContainer}>
+                        <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
+                        <Text style={[styles.dividerText, { color: themeColors.textMuted }]}>{cleanedText}</Text>
+                        <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
+                    </View>
+                </Pressable>
             );
         }
-        return <View style={styles.systemMessageContainer}><Text style={[styles.systemMessageText, {color: '#FEFEFE'}]}>{message.text}</Text></View>;
+        return (
+            <Pressable onLongPress={() => copyToClipboard(message.text)} style={{ width: '100%' }}>
+                <View style={styles.systemMessageContainer}><Text style={[styles.systemMessageText, {color: '#FEFEFE'}]}>{message.text}</Text></View>
+            </Pressable>
+        );
     }
 
     const getMinutesDiff = (ts1?: Timestamp, ts2?: Timestamp) => {
@@ -238,7 +253,7 @@ const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins,
                     )}
 
                     <View style={[styles.stack, isMyMessage ? styles.rightStack : styles.leftStack, isMyMessage ? styles.stackPadRight : styles.stackPadLeft]}>
-                    <Pressable onPress={() => onToggleActive(message.id, index)} style={bubbleStyles}>
+                        <Pressable onPress={() => onToggleActive(message.id, index)} onLongPress={() => copyToClipboard(message.text)} style={bubbleStyles}>
                         <Text style={[styles.text, isMyMessage ? styles.myMessageText : [styles.theirMessageText, { color: themeColors.text }]]} numberOfLines={0} {...({ includeFontPadding: false } as any)}>
                             {message.text}
                         </Text>
@@ -337,7 +352,10 @@ const ConversationScreen = () => {
     const listStyle = useAnimatedStyle(() => {
         const h = Math.max(0, keyboardOffset.value);
         const footerHeight = (isChatInitiallyClosed ? 44 : INPUT_HEIGHT);
-        return { paddingBottom: h + footerHeight + bottomInset } as any;
+        // Because the FlashList is visually flipped via parent transform,
+        // paddingBottom would become visual paddingTop. Use paddingTop so
+        // the keyboard/footer space appears visually at the bottom.
+        return { paddingTop: h + footerHeight + bottomInset } as any;
     });
 
     const flashListExtraProps = useMemo(() => ({ maxToRenderPerBatch: 10, windowSize: 5 }), []);
@@ -359,17 +377,19 @@ const ConversationScreen = () => {
     const chatFirstSnapshotRef = useRef(true);
 
     const combinedMessages = useMemo(() => {
-        // Deduplicate messages by id to avoid duplicate keys in lists (e.g., same message present in live and older arrays)
+        // Deduplicate messages by id and ensure newest-first ordering.
         const seen = new Set<string>();
-        const combined: Message[] = [];
+        const combinedUnsorted: Message[] = [];
         for (const m of [...liveMessages, ...olderMessages]) {
             if (!m || !m.id) continue;
-            if (seen.has(m.id)) {
-                continue;
-            }
+            if (seen.has(m.id)) continue;
             seen.add(m.id);
-            combined.push(m);
+            combinedUnsorted.push(m);
         }
+        // Sort by createdAt descending (newest first) so transform-based list
+        // always receives data in newest->oldest order regardless of how
+        // live/older buffers were mutated elsewhere.
+        const combined = combinedUnsorted.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
         return combined;
     }, [liveMessages, olderMessages]);
     
@@ -1141,18 +1161,22 @@ const ConversationScreen = () => {
             if (isContextMessage) {
                 const cleanedText = (m?.text || '').replace(/^-+\s*|\s*-+$/g, '').trim();
                 return (
-                    <View style={styles.dividerContainer}>
-                        <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
-                        <Text style={[styles.dividerText, { color: themeColors.textMuted }]}>{cleanedText}</Text>
-                        <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
-                    </View>
+                    <Pressable onLongPress={() => copyToClipboard(cleanedText)} style={{ width: '100%', transform: [{ scaleY: -1 }] }}>
+                        <View style={styles.dividerContainer}>
+                            <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
+                            <Text style={[styles.dividerText, { color: themeColors.textMuted }]}>{cleanedText}</Text>
+                            <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
+                        </View>
+                    </Pressable>
                 );
             }
 
             return (
-                <View style={styles.systemMessageContainer}>
-                    <Text style={[styles.systemMessageText, { color: '#FEFEFE' }]}>{m?.text}</Text>
-                </View>
+                <Pressable onLongPress={() => copyToClipboard(m?.text)} style={{ width: '100%', transform: [{ scaleY: -1 }] }}>
+                    <View style={styles.systemMessageContainer}>
+                        <Text style={[styles.systemMessageText, { color: '#FEFEFE' }]}>{m?.text}</Text>
+                    </View>
+                </Pressable>
             );
         }
 
@@ -1185,7 +1209,7 @@ const ConversationScreen = () => {
         // DEV debug logs removed for production
 
         return (
-            <View style={{ width: '100%' }}>
+            <View style={{ width: '100%', transform: [{ scaleY: -1 }] }}>
                 {item.showTimeSeparator && item.separatorLabel ? (
                     <View style={styles.timeSeparatorContainer}>
                         <Text style={[styles.timeSeparatorText, { color: themeColors.textMuted }]}>{item.separatorLabel}</Text>
@@ -1219,6 +1243,7 @@ const ConversationScreen = () => {
                             <View style={[(styles as any)[bubbleCornerKey], { overflow: 'hidden' }]}> 
                                 <Pressable
                                     onPress={() => handleToggleActive(m?.id || m?.clientId, typeof item.index === 'number' ? item.index : undefined)}
+                                    onLongPress={() => copyToClipboard(m?.text)}
                                     hitSlop={6}
                                     android_ripple={{ color: '#00000010', borderless: false }}
                                     style={({ pressed }) => [
@@ -1783,9 +1808,9 @@ const ConversationScreen = () => {
                         </View>
                 </AnimatedModal>
 
-                <View style={[styles.header, { height: 60 + (insets?.top || 0), paddingTop: (insets?.top || 0), borderBottomColor: themeColors.border, backgroundColor: themeColors.background, zIndex: 50, elevation: 6 }]}>
+                <View style={[styles.header, { height: 60 + (insets?.top || 0), paddingTop: (insets?.top || 0), borderBottomColor: 'transparent', borderBottomWidth: 0, backgroundColor: themeColors.background, zIndex: 50, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 6 }]}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon}>
-                        <Ionicons name="arrow-back" size={24} color={themeColors.text} />
+                        <Ionicons name="arrow-back" size={24} color={themeColors.tint} />
                         {showBackButtonBadge && <View style={[styles.backButtonBadge, { backgroundColor: themeColors.danger, borderColor: themeColors.background }]} />}
                     </TouchableOpacity>
                     <View style={styles.headerTitleContainer}>
@@ -1816,13 +1841,14 @@ const ConversationScreen = () => {
                     {messagesLoading ? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator size="large" color={themeColors.tint} /></View> : (
                         <View style={{ flex: 1, overflow: 'hidden' }} onLayout={(e) => { if (chatHeight == null) setChatHeight(e.nativeEvent.layout.height); }}>
                             <View style={{ height: chatHeight ?? '100%', position: 'relative' }}>
-                                <Animated.View style={[{ flex: 1, width: '100%' }, listStyle]}>
+                                <Animated.View style={[{ flex: 1, width: '100%', transform: [{ scaleY: -1 }] }, listStyle]}>
                                     <FlashList
                                         key={chatId || 'chat'}
                                         ref={(r) => { listRef.current = r; }}
                                         data={listData}
                                         extraData={activeMessageId}
-                                        inverted
+                                        // Items are flipped back in `renderItem` so leave content container un-flipped.
+                                        contentContainerStyle={styles.listContent}
                                         renderItem={renderItem}
                                         getItemType={(item: any) => item?.layoutType || item?.type || 'message'}
                                         keyExtractor={(item, idx) => {
@@ -1836,8 +1862,11 @@ const ConversationScreen = () => {
                                         {...(flashListExtraProps as any)}
                                         showsVerticalScrollIndicator={true}
                                         scrollIndicatorInsets={{ right: 1 }}
-                                        contentContainerStyle={styles.listContent}
+                                        // contentContainerStyle moved above to include transform
                                         keyboardShouldPersistTaps="handled"
+                                        // With the transform flip we keep logical ordering
+                                        // (newest at logical start). Load older messages when
+                                        // the logical end is reached (onEndReached).
                                         onEndReached={() => loadOlderMessages()}
                                         onEndReachedThreshold={0.2}
                                         ListFooterComponent={isLoadingMore ? <ActivityIndicator size="small" color={themeColors.tint} /> : null}
@@ -1858,10 +1887,10 @@ const ConversationScreen = () => {
                                 </Animated.View>
 
                                 {/* Input overlay (absolute) - animated via translateY so list layout stays static) */}
-                                <Animated.View style={[{ position: 'absolute', left: 0, right: 0, bottom: 0, height: isChatInitiallyClosed ? 44 : INPUT_HEIGHT, backgroundColor: themeColors.background, zIndex: 9999, elevation: 20, justifyContent: isChatInitiallyClosed ? 'center' : undefined }, inputAnim]} pointerEvents="auto">
+                                <Animated.View style={[{ position: 'absolute', left: 0, right: 0, bottom: 0, height: isChatInitiallyClosed ? 36 : INPUT_HEIGHT, backgroundColor: themeColors.background, zIndex: 9999, elevation: 0, shadowColor: 'transparent', justifyContent: isChatInitiallyClosed ? 'center' : undefined }, inputAnim]} pointerEvents="auto">
                                     {isChatInitiallyClosed ? (
-                                        <View style={[styles.inputContainer, { borderTopColor: themeColors.border, backgroundColor: themeColors.background, paddingVertical: 6, paddingBottom: 0, justifyContent: 'center', alignItems: 'center', transform: [{ translateY: -10 }] }]}>
-                                            <Text style={[styles.closedChatText, { flex: 0, color: themeColors.textMuted, textAlign: 'center', textAlignVertical: 'center', fontSize: 13, marginTop: 6 }]}>Czat został zamknięty</Text>
+                                        <View style={[styles.inputContainer, { borderTopColor: themeColors.border, backgroundColor: themeColors.background, paddingVertical: 4, paddingBottom: 0, justifyContent: 'center', alignItems: 'center', transform: [{ translateY: -12 }] }]}>
+                                            <Text style={[styles.closedChatText, { flex: 0, color: themeColors.textMuted, textAlign: 'center', textAlignVertical: 'center', fontSize: 13, marginTop: 12 }]}>Czat został zamknięty</Text>
                                         </View>
                                     ) : chat?.userIsBanned ? (
                                         <View style={[styles.inputContainer, { borderTopColor: themeColors.border, backgroundColor: themeColors.background, padding: 12, paddingBottom: bottomInset }]}>
@@ -1869,7 +1898,7 @@ const ConversationScreen = () => {
                                             <Text style={[styles.closedChatText, { color: themeColors.textMuted }]}>Wysyłanie wiadomości zostało zablokowane dla tego użytkownika.</Text>
                                         </View>
                                     ) : (
-                                        <View style={[styles.inputContainer, { borderTopColor: themeColors.border, backgroundColor: themeColors.background, paddingBottom: bottomInset }]}>
+                                        <View style={[styles.inputContainer, { borderTopColor: themeColors.border, borderTopWidth: 0, backgroundColor: themeColors.background, paddingBottom: bottomInset }]}>
                                             <TextInput nativeID="chat-new-message" style={[styles.input, { color: themeColors.text, backgroundColor: '#f3f4f8' }]} value={newMessage} onChangeText={setNewMessage} placeholder="Napisz wiadomość..." placeholderTextColor={themeColors.textMuted} multiline autoComplete="off" />
                                             <TouchableOpacity onPress={handleSend} style={[styles.sendButton, { backgroundColor: themeColors.tint }]}><Ionicons name="send" size={20} color="white" /></TouchableOpacity>
                                         </View>
@@ -1921,7 +1950,7 @@ const styles = StyleSheet.create({
     destructiveButton: { borderRadius: 12, paddingVertical: 12, paddingHorizontal: 16, minWidth: 120, alignItems: 'center' },
     destructiveButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
     container: { flex: 1 },
-    header: { height: 60, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, borderBottomWidth: 1 },
+    header: { height: 60, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, borderBottomWidth: 0 },
     headerIcon: { padding: 5, marginLeft: 5, position: 'relative' },
     backButtonBadge: { position: 'absolute', top: 3, right: 3, width: 10, height: 10, borderRadius: 5, borderWidth: 1.5, },
     headerTitleContainer: { flex: 1, marginLeft: 15, alignItems: 'flex-start' },
@@ -1954,7 +1983,10 @@ const styles = StyleSheet.create({
     },
     headerActionButton: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginHorizontal: 5, justifyContent: 'center', alignItems: 'center' },
     headerActionButtonText: { color: 'white', fontSize: 13, fontWeight: '500' },
-    listContent: { paddingVertical: 10, paddingHorizontal: 6, },
+    // Use paddingBottom because the list is visually flipped via parent transform.
+    // Logical bottom padding becomes visual top padding, which provides space
+    // above older messages.
+    listContent: { paddingBottom: 10, paddingHorizontal: 6, },
     timeSeparatorContainer: { alignItems: 'center', marginVertical: 8 },
     timeSeparatorFullRow: { width: '100%', alignItems: 'center', marginVertical: 8 },
     timestamp: { fontSize: 12, color: '#999', marginBottom: 2 },

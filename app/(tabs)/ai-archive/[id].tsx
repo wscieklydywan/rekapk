@@ -268,23 +268,20 @@ const AiConversationDetailScreen = () => {
                                 }}
                             />
                         )}
-            {/* Header */}
-                <View style={[styles.headerSlot, { height: headerHeight, backgroundColor: themeColors.card ?? themeColors.background, borderBottomColor: themeColors.border }]}> 
-                    <Animated.View style={[styles.headerLayer]} pointerEvents={'auto'}>
-                        <View style={[styles.headerContent, { paddingTop: 28 + insets.top }]}> 
-                        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                            <Ionicons name="chevron-back" size={28} color={themeColors.tint} />
-                        </TouchableOpacity>
-                        <View style={styles.headerTitleContainer}>
-                             <Text style={[styles.headerTitle, { color: themeColors.text }]} numberOfLines={1}>{contactName}</Text>
-                             <Text style={[styles.headerSubtitle, { color: themeColors.textMuted }]}>{loading ? 'Ładowanie...' : `${messageCount} wiadomości`}</Text>
-                        </View>
-                        <TouchableOpacity onPress={handleDelete} style={styles.deleteButton}>
-                            <Ionicons name="trash-outline" size={24} color={themeColors.danger} />
-                        </TouchableOpacity>
+            {/* Header (unified with Forms detail header) */}
+                <View style={[styles.header, { height: headerHeight, paddingTop: 12 + insets.top, backgroundColor: themeColors.background, borderBottomColor: themeColors.border, borderBottomWidth: 0, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 6 }]}> 
+                    <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon}>
+                        <Ionicons name="arrow-back" size={24} color={themeColors.tint} />
+                        { /* keep badge behavior consistent */ }
+                    </TouchableOpacity>
+                    <View style={[styles.headerTitleContainer, { marginLeft: 15, alignItems: 'flex-start' }]}> 
+                         <Text style={[styles.headerTitle, { color: themeColors.text }]} numberOfLines={1}>{contactName}</Text>
+                         <Text style={[styles.headerSubtitle, { color: themeColors.textMuted }]}>{loading ? 'Ładowanie...' : `${messageCount} wiadomości`}</Text>
                     </View>
-                </Animated.View>
-            </View>
+                    <TouchableOpacity onPress={handleDelete} style={styles.headerIcon}>
+                        <Ionicons name="trash-outline" size={22} color={themeColors.danger} />
+                    </TouchableOpacity>
+                </View>
 
             {loading ? (
                 <ActivityIndicator style={{ flex: 1, justifyContent: 'center' }} color={themeColors.tint} />
@@ -312,7 +309,7 @@ const AiConversationDetailScreen = () => {
 // --- STYLE --- 
 
 const styles = StyleSheet.create({
-    headerSlot: { height: 64, borderBottomWidth: 1 /* borderBottomColor applied inline */, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 4, elevation: 1 },
+    headerSlot: { height: 64, borderBottomWidth: 0 /* separator removed */, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 3 },
     headerLayer: {
         position: 'absolute',
         top: 0,
@@ -321,16 +318,25 @@ const styles = StyleSheet.create({
         height: '100%',
     },
     headerContent: {
-        paddingTop: 28,
-        paddingBottom: 8,
+        paddingTop: 0,
+        paddingBottom: 10,
         paddingHorizontal: 15,
         flexDirection: 'row',
         alignItems: 'center',
     },
+    header: { 
+        paddingTop: Platform.OS === 'android' ? 25 : 45, 
+        paddingBottom: 10, 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        paddingHorizontal: 10, 
+        borderBottomWidth: 0,
+    },
     backButton: { marginRight: 10 },
+    headerIcon: { padding: 5, position: 'relative' },
     headerTitleContainer: { flex: 1 },
-    headerTitle: { fontSize: 18, fontWeight: 'bold' },
-    headerSubtitle: { fontSize: 14, fontWeight: '500' },
+    headerTitle: { fontSize: 17, fontWeight: '600' },
+    headerSubtitle: { fontSize: 13, opacity: 0.8 },
     deleteButton: { padding: 5, marginLeft: 10 },
     listContentContainer: { paddingVertical: 15, paddingHorizontal: 10 },
     messageRow: { 

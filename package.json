@@ -19,6 +19,7 @@
     "@shopify/flash-list": "1.6.4",
     "expo": "~51.0.21",
     "expo-blur": "~13.0.3",
+    "expo-clipboard": "~6.0.3",
     "expo-constants": "~16.0.2",
     "expo-dev-client": "~4.0.29",
     "expo-device": "~6.0.2",

@@ -131,9 +131,9 @@ const FormDetailScreen = () => {
         <Animated.View entering={FadeIn.duration(FORM_FADE_IN_DUR).easing(Easing.out(Easing.cubic))} exiting={FadeOut.duration(FORM_FADE_OUT_DUR).easing(Easing.in(Easing.cubic))} style={{ flex: 1 }}>
             <Animated.View entering={SlideInRight.duration(FORM_SLIDE_IN_DUR).easing(Easing.out(Easing.cubic))} exiting={SlideOutRight.duration(FORM_SLIDE_OUT_DUR).easing(Easing.in(Easing.cubic))} style={{ flex: 1 }}>
                 <View style={[styles.container, { backgroundColor: themeColors.background }]}>
-            <View style={[styles.header, { height: headerHeight, paddingTop: 12 + insets.top, backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
+            <View style={[styles.header, { height: headerHeight, paddingTop: 12 + insets.top, backgroundColor: themeColors.background, borderBottomColor: themeColors.border, borderBottomWidth: 0, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 6 }]}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon}>
-                    <Ionicons name="arrow-back" size={24} color={themeColors.text} />
+                    <Ionicons name="arrow-back" size={24} color={themeColors.tint} />
                      {showBackButtonBadge && (
                         <View style={[styles.backButtonBadge, { backgroundColor: themeColors.danger, borderColor: themeColors.background }]} />
                     )}
@@ -214,7 +214,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row', 
         alignItems: 'center', 
         paddingHorizontal: 10, 
-        borderBottomWidth: 1,
+        borderBottomWidth: 0,
     },
     headerIcon: { 
         padding: 5, 
