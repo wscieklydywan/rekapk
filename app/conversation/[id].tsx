@@ -21,10 +21,10 @@ import { ConfirmationModal } from '@/components/ConfirmationModal';
 import TabTransition from '@/components/TabTransition';
 import { addPendingDelete, removePendingDelete } from '@/lib/pendingDeletes';
 import toast from '@/lib/toastController';
+import * as Clipboard from 'expo-clipboard';
 import { useKeyboardHandler } from 'react-native-keyboard-controller';
 import { MenuProvider } from 'react-native-popup-menu';
 import Animated, { Easing, FadeIn, FadeOut, interpolate, SlideInRight, SlideOutRight, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import * as Clipboard from 'expo-clipboard';
 
 const GROUP_THRESHOLD_MINUTES = 3;
 const MESSAGES_LIMIT = 30; // max number of messages to keep in live subscription and persisted to AsyncStorage
