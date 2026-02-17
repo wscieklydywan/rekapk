@@ -51,7 +51,7 @@ const copyToClipboard = async (text?: string) => {
     try {
         if (!text) return;
         await Clipboard.setStringAsync(String(text));
-        toast.show('Skopiowano');
+        // Do NOT show our custom toast here; rely on system/native feedback.
     } catch (e) { /* ignore */ }
 };
 
@@ -131,21 +131,21 @@ const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins,
         const lowerCaseText = message.text.toLowerCase();
         const isContextMessage = lowerCaseText.includes('kontekst rozmowy z ai') || lowerCaseText.includes('koniec rozmowy z konsultantem ai');
 
-        if (isContextMessage) {
+            if (isContextMessage) {
             const cleanedText = message.text.replace(/^-+\s*|\s*-+$/g, '').trim();
             return (
-                <Pressable onLongPress={() => copyToClipboard(cleanedText)} style={{ width: '100%' }}>
+                <Pressable onLongPress={() => { copyToClipboard(cleanedText); onToggleActive(message.id, index); }} style={{ width: '100%' }}>
                     <View style={styles.dividerContainer}>
                         <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
-                        <Text style={[styles.dividerText, { color: themeColors.textMuted }]}>{cleanedText}</Text>
+                        <Text selectable={false} style={[styles.dividerText, { color: themeColors.textMuted }]}>{cleanedText}</Text>
                         <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
                     </View>
                 </Pressable>
             );
         }
         return (
-            <Pressable onLongPress={() => copyToClipboard(message.text)} style={{ width: '100%' }}>
-                <View style={styles.systemMessageContainer}><Text style={[styles.systemMessageText, {color: '#FEFEFE'}]}>{message.text}</Text></View>
+            <Pressable onLongPress={() => { copyToClipboard(message.text); onToggleActive(message.id, index); }} style={{ width: '100%' }}>
+                <View style={styles.systemMessageContainer}><Text selectable={false} style={[styles.systemMessageText, {color: '#FEFEFE'}]}>{message.text}</Text></View>
             </Pressable>
         );
     }
@@ -253,8 +253,8 @@ const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins,
                     )}
 
                     <View style={[styles.stack, isMyMessage ? styles.rightStack : styles.leftStack, isMyMessage ? styles.stackPadRight : styles.stackPadLeft]}>
-                        <Pressable onPress={() => onToggleActive(message.id, index)} onLongPress={() => copyToClipboard(message.text)} style={bubbleStyles}>
-                        <Text style={[styles.text, isMyMessage ? styles.myMessageText : [styles.theirMessageText, { color: themeColors.text }]]} numberOfLines={0} {...({ includeFontPadding: false } as any)}>
+                        <Pressable onPress={() => onToggleActive(message.id, index)} onLongPress={() => { copyToClipboard(message.text); onToggleActive(message.id, index); }} hitSlop={6} android_ripple={{ color: '#00000010', borderless: false }} style={bubbleStyles}>
+                        <Text selectable={true} style={[styles.text, isMyMessage ? styles.myMessageText : [styles.theirMessageText, { color: themeColors.text }]]} numberOfLines={0} {...({ includeFontPadding: false } as any)}>
                             {message.text}
                         </Text>
                         {message.pending && (
@@ -472,6 +472,62 @@ const ConversationScreen = () => {
     const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
     const [activeMessageIndex, setActiveMessageIndex] = useState<number | null>(null);
     const activeTimestampTimerRef = useRef<number | null>(null);
+    // Copy-menu state: visible when user long-presses a message
+    const [copyMenuVisible, setCopyMenuVisible] = useState(false);
+    const [copyMenuMounted, setCopyMenuMounted] = useState(false);
+    const [copyMenuText, setCopyMenuText] = useState<string | null>(null);
+    const [copyMenuMessageId, setCopyMenuMessageId] = useState<string | null>(null);
+    const [copyMenuX, setCopyMenuX] = useState<number | null>(null);
+    const [copyMenuY, setCopyMenuY] = useState<number | null>(null);
+    const copyMenuTimerRef = useRef<number | null>(null);
+    const copyMenuAnim = useSharedValue(0);
+    const copyMenuAnimatedStyle = useAnimatedStyle(() => {
+        const s = interpolate(copyMenuAnim.value, [0, 1], [0.78, 1]);
+        const o = interpolate(copyMenuAnim.value, [0, 1], [0, 1]);
+        return { transform: [{ scale: s }], opacity: o } as any;
+    }, [theme]);
+
+    const openCopyMenu = (text?: string | null, messageId?: string | null, coords?: { pageX?: number; pageY?: number } | null) => {
+        if (copyMenuTimerRef.current) { clearTimeout(copyMenuTimerRef.current); copyMenuTimerRef.current = null; }
+        setCopyMenuText(text ?? null);
+        setCopyMenuMessageId(messageId ?? null);
+        setCopyMenuX(coords?.pageX ?? null);
+        setCopyMenuY(coords?.pageY ?? null);
+        setCopyMenuMounted(true);
+        // small delay to ensure mount before animating
+        setTimeout(() => {
+            try { copyMenuAnim.value = withTiming(1, { duration: 160, easing: Easing.out(Easing.back(2)) }); } catch (e) { /* ignore */ }
+            setCopyMenuVisible(true);
+        }, 8);
+        // auto-close after 3.5s (use closeCopyMenu so animation runs)
+        copyMenuTimerRef.current = window.setTimeout(() => {
+            try { closeCopyMenu(); } catch (e) { /* ignore */ }
+            copyMenuTimerRef.current = null;
+        }, 3500);
+        // visually activate message
+        try { if (messageId) handleToggleActive(messageId); } catch (e) { /* ignore */ }
+    };
+
+    const closeCopyMenu = () => {
+        if (copyMenuTimerRef.current) { clearTimeout(copyMenuTimerRef.current); copyMenuTimerRef.current = null; }
+        try { copyMenuAnim.value = withTiming(0, { duration: 140, easing: Easing.in(Easing.quad) }); } catch (e) { /* ignore */ }
+        // wait for exit animation then unmount and clear
+        setTimeout(() => {
+            setCopyMenuVisible(false);
+            setCopyMenuMounted(false);
+            setCopyMenuText(null);
+            setCopyMenuMessageId(null);
+            setCopyMenuX(null);
+            setCopyMenuY(null);
+        }, 160);
+    };
+
+    const handleCopyFromMenu = async () => {
+        try {
+            if (copyMenuText) await copyToClipboard(copyMenuText);
+        } catch (e) { /* ignore */ }
+        closeCopyMenu();
+    };
     const listRef = useRef<any | null>(null);
     const initialScrollDoneRef = useRef(false);
     const scrollOffsetRef = useRef(0);
@@ -1158,26 +1214,26 @@ const ConversationScreen = () => {
             const lowerCaseText = (m?.text || '').toLowerCase();
             const isContextMessage = lowerCaseText.includes('kontekst rozmowy z ai') || lowerCaseText.includes('koniec rozmowy z konsultantem ai');
 
-            if (isContextMessage) {
-                const cleanedText = (m?.text || '').replace(/^-+\s*|\s*-+$/g, '').trim();
-                return (
-                    <Pressable onLongPress={() => copyToClipboard(cleanedText)} style={{ width: '100%', transform: [{ scaleY: -1 }] }}>
-                        <View style={styles.dividerContainer}>
-                            <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
-                            <Text style={[styles.dividerText, { color: themeColors.textMuted }]}>{cleanedText}</Text>
-                            <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
+                if (isContextMessage) {
+                    const cleanedText = (m?.text || '').replace(/^-+\s*|\s*-+$/g, '').trim();
+                    return (
+                        <View style={{ width: '100%', transform: [{ scaleY: -1 }] }}>
+                            <View style={styles.dividerContainer}>
+                                <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
+                                <Text selectable={false} style={[styles.dividerText, { color: themeColors.textMuted }]}>{cleanedText}</Text>
+                                <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
+                            </View>
                         </View>
-                    </Pressable>
-                );
-            }
+                    );
+                }
 
-            return (
-                <Pressable onLongPress={() => copyToClipboard(m?.text)} style={{ width: '100%', transform: [{ scaleY: -1 }] }}>
-                    <View style={styles.systemMessageContainer}>
-                        <Text style={[styles.systemMessageText, { color: '#FEFEFE' }]}>{m?.text}</Text>
+                return (
+                    <View style={{ width: '100%', transform: [{ scaleY: -1 }] }}>
+                        <View style={styles.systemMessageContainer}>
+                            <Text selectable={false} style={[styles.systemMessageText, { color: '#FEFEFE' }]}>{m?.text}</Text>
+                        </View>
                     </View>
-                </Pressable>
-            );
+                );
         }
 
         const sender = m?.sender ?? (m?.adminId ? 'admin' : 'user');
@@ -1243,7 +1299,7 @@ const ConversationScreen = () => {
                             <View style={[(styles as any)[bubbleCornerKey], { overflow: 'hidden' }]}> 
                                 <Pressable
                                     onPress={() => handleToggleActive(m?.id || m?.clientId, typeof item.index === 'number' ? item.index : undefined)}
-                                    onLongPress={() => copyToClipboard(m?.text)}
+                                    onLongPress={(e) => openCopyMenu(m?.text ?? null, m?.id ? String(m.id) : (m?.clientId ? String(m.clientId) : null), { pageX: e.nativeEvent.pageX, pageY: e.nativeEvent.pageY })}
                                     hitSlop={6}
                                     android_ripple={{ color: '#00000010', borderless: false }}
                                     style={({ pressed }) => [
@@ -1254,7 +1310,7 @@ const ConversationScreen = () => {
                                             pressed ? { opacity: Platform.OS === 'ios' ? 0.85 : 1 } : null,
                                         ]}
                                 >
-                                    <Text style={[styles.text, isMy ? styles.adminText : styles.theirMessageText]} numberOfLines={0} {...({ includeFontPadding: false } as any)}>{m?.text}</Text>
+                                    <Text selectable={!copyMenuVisible} style={[styles.text, isMy ? styles.adminText : styles.theirMessageText]} numberOfLines={0} {...({ includeFontPadding: false } as any)}>{m?.text}</Text>
                                 </Pressable>
                             </View>
                         </View>
@@ -1937,6 +1993,40 @@ const ConversationScreen = () => {
                             </TouchableOpacity>
                         )}
                     </Animated.View>
+                </>
+            )}
+            {/* Copy bubble shown on long-press (simple centered bubble) */}
+            {copyMenuMounted && (
+                <>
+                    <Pressable style={[StyleSheet.absoluteFill, { zIndex: 9995 }]} onPress={closeCopyMenu} />
+                    {/** Position bubble at long-press coords (right/top above message). Fallback to centered bottom if coords missing. */}
+                    {(() => {
+                        const bubbleW = 140;
+                        const bubbleH = 40;
+                        let style: any = { position: 'absolute', zIndex: 10001 };
+                        if (copyMenuX != null && copyMenuY != null) {
+                            let left = copyMenuX - bubbleW + 12; // align bubble's right edge near press
+                            left = Math.min(Math.max(left, 8), Math.max(8, width - bubbleW - 8));
+                            let top = copyMenuY - bubbleH - 12; // place above press
+                            top = Math.max(top, 8);
+                            style.left = left;
+                            style.top = top;
+                        } else {
+                            style.left = 0;
+                            style.right = 0;
+                            style.bottom = (isChatInitiallyClosed ? 44 : INPUT_HEIGHT) + 72;
+                            style.alignItems = 'center';
+                        }
+                        return (
+                            <Animated.View pointerEvents="box-none" style={[style, copyMenuAnimatedStyle]}>
+                                <View style={{ backgroundColor: themeColors.background, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.12, shadowRadius: 8, elevation: 10 }}>
+                                    <TouchableOpacity onPress={handleCopyFromMenu} activeOpacity={0.85}>
+                                        <Text style={{ color: themeColors.tint, fontWeight: '700', fontSize: 15, textAlign: 'center' }}>Kopiuj</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </Animated.View>
+                        );
+                    })()}
                 </>
             )}
         </MenuProvider>

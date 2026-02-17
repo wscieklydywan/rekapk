@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router';
 import { doc, getFirestore, onSnapshot, updateDoc } from 'firebase/firestore';
 import React, { useEffect, useState } from 'react';
 import { AppState, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const notificationModeOptions = [
   { label: 'Tylko moje i nieprzypisane', shortLabel: 'Tylko moje', value: 'assigned' },
@@ -18,6 +19,9 @@ const NotificationsScreen = () => {
   const theme = useColorScheme() ?? 'light';
   const themeColors = Colors[theme];
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const headerBase = 64;
+  const headerHeight = headerBase + insets.top;
   const { user } = useAuth();
   const db = getFirestore();
 
@@ -82,9 +86,9 @@ const NotificationsScreen = () => {
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.container, { backgroundColor: '#f6f6f6' }]}> 
-      <View style={[styles.headerSlot, { backgroundColor: '#f6f6f6', borderBottomColor: themeColors.border }]}> 
+      <View style={[styles.headerSlot, { height: headerHeight, backgroundColor: '#f6f6f6', borderBottomColor: themeColors.border }]}> 
         <View style={styles.headerLayer}>
-          <View style={[styles.headerContent, { borderColor: themeColors.border }]}> 
+          <View style={[styles.headerContent, { borderColor: themeColors.border, paddingTop: insets.top }]}> 
             <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
               <Ionicons name="arrow-back" size={22} color={themeColors.tint} />
             </TouchableOpacity>

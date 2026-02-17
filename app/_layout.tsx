@@ -72,7 +72,9 @@ const RootLayout = () => {
   useEffect(() => {
     if (Platform.OS === 'android' && NavigationBar && typeof NavigationBar.setBackgroundColorAsync === 'function') {
       try {
-        NavigationBar.setBackgroundColorAsync(themeColors.background);
+        // Make navigation bar fully transparent and positioned absolute so content can render fullscreen under it.
+        NavigationBar.setBackgroundColorAsync('transparent');
+        NavigationBar.setPositionAsync('absolute');
         NavigationBar.setButtonStyleAsync(scheme === 'light' ? 'dark' : 'light');
       } catch (e) { /* ignore */ }
     }
@@ -92,7 +94,7 @@ const RootLayout = () => {
                 <NotificationProvider>
                   <SafeAreaProvider>
                     <KeyboardProvider>
-                      <SafeAreaView style={{ flex: 1 }} edges={[ 'left', 'right', 'bottom' as any ]}>
+                      <SafeAreaView style={{ flex: 1, backgroundColor: themeColors.background }} edges={[ 'left', 'right' ]}>
                         { (global as any).__DEV__ ? (
                           <DebugProvider>
                             <InitialLayout />
