@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AnimatedModal from '@/components/AnimatedModal';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import TabTransition from '@/components/TabTransition';
+import useSqlMessages from '@/hooks/useSqlMessages';
 import { addPendingDelete, removePendingDelete } from '@/lib/pendingDeletes';
 import toast from '@/lib/toastController';
 import * as Clipboard from 'expo-clipboard';
@@ -80,38 +81,11 @@ const DIAG_IGNORE_INSETS = false;
 // Dev-only: enable verbose message subscription logging when running in dev
 const DEV_MSG_LOGGING = (global as any).__DEV__ || process.env.NODE_ENV === 'development';
 
-// In-memory cache to provide instant "messenger feel" across navigations
-const inMemoryMessageCache: Map<string, { messages: any[]; lastVisible?: number; lastVisibleDocId?: string; lastVisibleDoc?: any; updatedAt?: number }> = new Map();
-
 // TEMPORARY: disable badge/scroll-button logic for debugging freezes
 const TEMP_DISABLE_BADGE = true;
 
 // Max number of chat caches to keep in memory (LRU eviction)
 const MAX_IN_MEMORY_CHATS = 8;
-
-const setInMemoryCache = (chatId: string, payload: { messages: any[]; lastVisible?: number; lastVisibleDocId?: string; lastVisibleDoc?: any; updatedAt?: number }) => {
-    try {
-        // move to recent by deleting first if exists
-        if (inMemoryMessageCache.has(chatId)) inMemoryMessageCache.delete(chatId);
-        inMemoryMessageCache.set(chatId, payload);
-        // evict oldest entries if over limit (Map preserves insertion order)
-        while (inMemoryMessageCache.size > MAX_IN_MEMORY_CHATS) {
-            const oldestKey = inMemoryMessageCache.keys().next().value;
-            if (!oldestKey) break;
-            inMemoryMessageCache.delete(oldestKey);
-        }
-    } catch (e) {
-        /* ignore */
-    }
-};
-
-const getInMemoryCache = (chatId: string) => {
-    const entry = inMemoryMessageCache.get(chatId) || null;
-    if (!entry) return null;
-    // mark as recently used
-    try { inMemoryMessageCache.delete(chatId); inMemoryMessageCache.set(chatId, entry); } catch(e) {}
-    return entry;
-};
 
 const MessageBubble = ({ message, prevMessage, nextMessage, themeColors, admins, showAdminTag, onRetry, index, activeMessageId, activeMessageIndex, onToggleActive, showTimeSeparator, separatorLabel, listInverted }: { message: Message; prevMessage?: Message; nextMessage?: Message; themeColors: any; admins: { [key: string]: User }, showAdminTag?: boolean, onRetry?: (m: Message) => void, index: number, activeMessageId: string | null, activeMessageIndex: number | null, onToggleActive: (id: string | null, idx?: number) => void, showTimeSeparator?: boolean, separatorLabel?: string | null, listInverted?: boolean }) => {
     const { width: _mbWidth } = useWindowDimensions();
@@ -917,26 +891,20 @@ const ConversationScreen = () => {
     const { totalUnreadCount, admins: adminsMap, setChats } = useChatContext();
     const adminsList = useMemo(() => Object.values(adminsMap), [adminsMap]);
 
-    // Try in-memory cache first to provide instant UX
+    // Use SQLite-backed hook as primary source for live messages
+    const { messages: sqlMessages, sendMessage: sendSqlMessage } = useSqlMessages(chatId as string, MESSAGES_LIMIT);
+
     useEffect(() => {
-        if (!chatId) return;
+        if (!sqlMessages || !sqlMessages.length) return;
         try {
-            const entry = getInMemoryCache(chatId);
-            if (entry && entry.messages && entry.messages.length) {
-                /* in-memory cache used (log removed for production performance) */
-                // normalize createdAt back to Timestamp for UI/logic
-                const restored = entry.messages.map((m: any) => ({ ...m, createdAt: typeof m.createdAt === 'number' ? Timestamp.fromMillis(m.createdAt) : m.createdAt } as Message));
-                setLiveMessages(restored);
-                lastVisibleTimestampRef.current = entry.lastVisible || null;
-                lastVisibleDocIdRef.current = entry.lastVisibleDocId || null;
-                lastVisibleDocRef.current = entry.lastVisibleDoc || null;
-                cacheLoadedRef.current = true;
-                setMessagesLoading(false);
-            }
+            const restored = sqlMessages.map((m: any) => ({ ...m, createdAt: typeof m.createdAt === 'number' ? Timestamp.fromMillis(m.createdAt) : (m.createdAt?.toDate ? m.createdAt : Timestamp.fromMillis(Number(m.createdAt) || Date.now())) } as Message));
+            setLiveMessages(restored);
+            cacheLoadedRef.current = true;
+            setMessagesLoading(false);
         } catch (e) {
-            console.error('Error reading in-memory cache:', e);
+            console.error('Error applying sqlite messages to state:', e);
         }
-    }, [chatId]);
+    }, [sqlMessages, chatId]);
 
     // Reset pagination and message buffers when switching chats to avoid stale cursor/state
     useEffect(() => {
@@ -1019,11 +987,7 @@ const ConversationScreen = () => {
                 // mark that we loaded cache (either in-memory or AsyncStorage)
                 cacheLoadedRef.current = true;
 
-                // populate in-memory cache for next open (store numeric timestamps)
-                try {
-                    const stored = cached.map(m => ({ ...m, createdAt: m.createdAt?.toMillis ? m.createdAt.toMillis() : (typeof m.createdAt === 'number' ? m.createdAt : null) }));
-                    setInMemoryCache(chatId, { messages: stored, lastVisible: parsed.lastVisible, lastVisibleDocId: parsed.lastVisibleDocId, updatedAt: Date.now() });
-                } catch (e) { /* ignore */ }
+                // previously we populated an in-memory Map here; now SQLite is primary cache
 
             } catch (err) {
                 if (!cancelled) console.error('Failed to load cached messages:', err);
@@ -1035,11 +999,7 @@ const ConversationScreen = () => {
     // Persist recent messages (debounced) to AsyncStorage whenever messages change
     useEffect(() => {
         if (!chatId) return;
-        // update in-memory cache synchronously for instant subsequent opens
-        try {
-            const stored = combinedMessages.slice(0, MESSAGES_LIMIT).map(m => ({ ...m, createdAt: m.createdAt?.toMillis ? m.createdAt.toMillis() : (typeof m.createdAt === 'number' ? m.createdAt : null) }));
-            setInMemoryCache(chatId, { messages: stored, lastVisible: lastVisibleTimestampRef.current || undefined, lastVisibleDocId: lastVisibleDocIdRef.current || undefined, lastVisibleDoc: lastVisibleDocRef.current || undefined, updatedAt: Date.now() });
-        } catch (e) { /* ignore */ }
+        // previously we updated the in-memory Map here; SQLite now serves as the single source of truth
 
         if (cacheSaveTimerRef.current) {
             clearTimeout(cacheSaveTimerRef.current);
@@ -1427,71 +1387,14 @@ const ConversationScreen = () => {
         const text = newMessage.trim();
         setNewMessage('');
 
-        // optimistic local message
-        const clientId = `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
-        const localMessage: any = {
-            id: clientId,
-            clientId,
-            text,
-            createdAt: Timestamp.now(),
-            sender: 'admin',
-            adminId: user.uid,
-            pending: true,
-            _local: true,
-        };
-
-        setLiveMessages((prev) => {
-            const next = [localMessage, ...prev];
-            if (next.length > MESSAGES_LIMIT) {
-                const overflow = next.pop()!;
-                setOlderMessages((old) => [overflow, ...old]);
-            }
-            return next;
-        });
-
-        // write to server using clientId as doc id to avoid dupes on retry
+        // Use SQLite-backed send (optimistic insert handled inside the hook)
         try {
-            const batch = writeBatch(db);
-            const chatDocRef = doc(db, 'chats', chatId);
-            const newMessageRef = doc(collection(db, 'chats', chatId, 'messages'), clientId);
-
-            batch.set(newMessageRef, { 
-                text, 
-                createdAt: Timestamp.now(), 
-                sender: 'admin', 
-                adminId: user.uid,
-                clientId,
-            });
-
-            batch.update(chatDocRef, {
-                lastMessage: text,
-                lastMessageSender: 'admin',
-                lastMessageTimestamp: Timestamp.now(),
-                lastActivity: Timestamp.now(),
-                userUnread: increment(1),
-            });
-
-            await batch.commit();
-            // onSnapshot will replace local pending message with server doc when it arrives
-            // Auto-scroll logic after send: if user isn't far up, animate to bottom; if far, snap.
-            try {
-                const distance = scrollOffsetRef.current || 0;
-                if (listRef.current) {
-                    if (distance <= 600) {
-                        listRef.current.scrollToOffset({ offset: 0, animated: true });
-                    } else if (distance <= 1500) {
-                        // moderate distance — still animate
-                        listRef.current.scrollToOffset({ offset: 0, animated: true });
-                    } else {
-                        // very far — snap without heavy animation
-                        listRef.current.scrollToOffset({ offset: 0, animated: false });
-                    }
-                }
-            } catch (e) { /* ignore */ }
-        } catch (error) {
-            console.error('Error sending message:', error);
-            setLiveMessages(prev => prev.map(m => m.clientId === clientId ? { ...m, pending: false, failed: true } : m));
+            await sendSqlMessage(text);
+        } catch (e) {
+            console.error('sendSqlMessage error', e);
         }
+
+        // message sending delegated to `useSqlMessages` which handles optimistic insert and server write
     };
 
     const handleCloseChat = async () => {
@@ -1700,8 +1603,6 @@ const ConversationScreen = () => {
 
             // Remove from local list immediately
             setChats((prev: Chat[]) => prev.filter((c: Chat) => c.id !== chatId));
-            // clear in-memory cache for this chat to avoid stale data
-            try { inMemoryMessageCache.delete(chatId); } catch (e) { /* ignore */ }
 
             // Defer heavy deletion work slightly so navigation/exit animation isn't blocked
             try {
