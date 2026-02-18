@@ -17,6 +17,11 @@
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png"
       },
+      "statusBar": {
+        "translucent": true,
+        "backgroundColor": "transparent"
+      },
+      "googleServicesFile": "./android/app/google-services.json",
       "softwareKeyboardLayoutMode": "pan",
       "package": "com.wscieklydywan.reklamourapp",
       "permissions": [

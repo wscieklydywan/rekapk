@@ -1,11 +1,12 @@
 import * as SQLite from 'expo-sqlite';
 
 const DB_NAME = 'rekapk.db';
-// use openDatabaseSync as typed in expo-sqlite d.ts
-const db = (SQLite as any).openDatabaseSync ? (SQLite as any).openDatabaseSync(DB_NAME) : (SQLite as any).openDatabase ? (SQLite as any).openDatabase(DB_NAME) : null;
+// Prefer the standard runtime API openDatabase. Cast to any to avoid TS type mismatch.
+const db: any = (SQLite as any).openDatabase ? (SQLite as any).openDatabase(DB_NAME) : null;
 
 const execSql = (sql: string, args: any[] = []) => new Promise<any>((resolve, reject) => {
   try {
+    if (!db || typeof db.transaction !== 'function') return reject(new Error('SQLite database not available'));
     db.transaction((tx: any) => {
       tx.executeSql(sql, args, (_tx: any, res: any) => resolve(res), (_tx: any, err: any) => { reject(err); return false; });
     }, (e: any) => reject(e));
@@ -50,20 +51,17 @@ export const getMessages = async (chatId: string, limit: number = 50, beforeCrea
 
 export const upsertMessages = async (messages: any[]) => {
   if (!messages || messages.length === 0) return;
-  return new Promise<void>((resolve, reject) => {
-    db.transaction((tx: any) => {
-      for (const m of messages) {
-        const id = m.id || m.serverId || m.clientId;
-        const createdAt = m.createdAt && typeof m.createdAt === 'number' ? m.createdAt : (m.createdAt?.toMillis ? m.createdAt.toMillis() : Date.now());
-        const pending = m.pending ? 1 : 0;
-        const extra = m.extra ? JSON.stringify(m.extra) : null;
-        tx.executeSql(
-          `INSERT OR REPLACE INTO messages (id, chatId, clientId, text, sender, adminId, createdAt, pending, failed, extra) VALUES (?,?,?,?,?,?,?,?,?,?);`,
-          [id, m.chatId, m.clientId || null, m.text || '', m.sender || null, m.adminId || null, createdAt, pending, m.failed ? 1 : 0, extra]
-        );
-      }
-    }, (e: any) => reject(e), () => resolve());
-  });
+  // Use async execSql per-row to avoid relying on `db.transaction` directly
+  for (const m of messages) {
+    const id = m.id || m.serverId || m.clientId;
+    const createdAt = m.createdAt && typeof m.createdAt === 'number' ? m.createdAt : (m.createdAt?.toMillis ? m.createdAt.toMillis() : Date.now());
+    const pending = m.pending ? 1 : 0;
+    const extra = m.extra ? JSON.stringify(m.extra) : null;
+    await execSql(
+      `INSERT OR REPLACE INTO messages (id, chatId, clientId, text, sender, adminId, createdAt, pending, failed, extra) VALUES (?,?,?,?,?,?,?,?,?,?);`,
+      [id, m.chatId, m.clientId || null, m.text || '', m.sender || null, m.adminId || null, createdAt, pending, m.failed ? 1 : 0, extra]
+    );
+  }
 };
 
 export const deleteMessage = async (id: string) => {

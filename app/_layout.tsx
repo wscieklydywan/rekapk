@@ -10,8 +10,9 @@ import BottomToast from '@/components/BottomToast';
 import { Colors } from '@/constants/theme';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as SplashScreen from 'expo-splash-screen';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { Platform, StatusBar, UIManager, useColorScheme } from 'react-native';
+import { Platform, UIManager, useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -85,7 +86,7 @@ const RootLayout = () => {
 
   return (
     <>
-      <StatusBar translucent backgroundColor="transparent" />
+      <StatusBar style={scheme === 'light' ? 'dark' : 'light'} translucent backgroundColor="transparent" />
       <GestureHandlerRootView style={{ flex: 1 }}>
         <AuthProvider>
           <SessionProvider>
