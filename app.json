@@ -21,7 +21,7 @@
         "translucent": true,
         "backgroundColor": "transparent"
       },
-      "googleServicesFile": "./android/app/google-services.json",
+      "googleServicesFile": "./google-services.json",
       "softwareKeyboardLayoutMode": "pan",
       "package": "com.wscieklydywan.reklamourapp",
       "permissions": [
