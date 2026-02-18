@@ -8,6 +8,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 // Dev-only: import test screen to allow bypassing app wrappers when debugging overscroll
 import BottomToast from '@/components/BottomToast';
 import { Colors } from '@/constants/theme';
+import { initFirestoreNetworkControl } from '@/lib/FirestoreNetworkManager';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -82,6 +83,11 @@ const RootLayout = () => {
     // Try to hide any native splash overlay that may remain (no-op if already hidden)
     try { SplashScreen.hideAsync().catch(() => {}); } catch (e) { /* ignore */ }
   }, [scheme, themeColors]);
+
+  useEffect(() => {
+    // Initialize Firestore network control to disable retries when real internet is gone
+    try { initFirestoreNetworkControl(); } catch (e) { /* ignore */ }
+  }, []);
   // sonnerBridge removed per request; no bridge registration
 
   return (
