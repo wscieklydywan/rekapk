@@ -1,9 +1,9 @@
 
+import { useChatContext } from '@/app/contexts/ChatProvider';
+import { Colors } from '@/constants/theme';
+import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { View, useColorScheme } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { Colors } from '@/constants/theme';
-import { useChatContext } from '@/app/contexts/ChatProvider';
 
 const Badge = () => {
   const theme = useColorScheme() ?? 'light';

@@ -85,6 +85,7 @@ export const useSqlMessages = (chatId: string, pageSize = 50) => {
     if (!chatId || !user) return;
     const clientId = `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
     const now = Date.now();
+    try { console.log('OPTIMISTIC', clientId); } catch (e) { }
     // insert optimistic pending into sqlite
     await insertPendingMessage({ id: clientId, chatId, text, createdAt: now, clientId });
     setMessages(prev => {
@@ -95,7 +96,8 @@ export const useSqlMessages = (chatId: string, pageSize = 50) => {
 
     try {
       const messagesCollection = collection(db, 'chats', chatId, 'messages');
-      await addDoc(messagesCollection, { text, sender: 'admin', createdAt: serverTimestamp(), clientId });
+      const ref = await addDoc(messagesCollection, { text, sender: 'admin', createdAt: serverTimestamp(), clientId });
+      try { console.log('SENT', ref.id, 'clientId', clientId); } catch (e) {}
     } catch (e) {
       console.error('sendMessage error', e);
     }

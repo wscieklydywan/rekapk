@@ -1,8 +1,9 @@
 
-import React, { useState, useEffect, useContext, createContext } from 'react';
-import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { doc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
+import useSessionStore from '@/stores/sessionStore';
+import { User as FirebaseUser, onAuthStateChanged } from 'firebase/auth';
+import { doc, onSnapshot } from 'firebase/firestore';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 
 export interface AuthContextType {
   user: FirebaseUser | null;
@@ -24,10 +25,22 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       if (firebaseUser) {
         const userRef = doc(db, 'users', firebaseUser.uid);
-        const unsubscribeSnapshot = onSnapshot(userRef, (doc) => {
-          if (doc.exists()) {
-            setDisplayName(doc.data().displayName || null);
+        // try to read persisted session fallback first
+        try {
+          const s = useSessionStore.getState();
+          if (s && s.displayName) {
+            setDisplayName(s.displayName);
           }
+        } catch (e) { /* ignore */ }
+
+        const unsubscribeSnapshot = onSnapshot(userRef, (docSnap) => {
+          if (docSnap.exists()) {
+            const name = docSnap.data().displayName || null;
+            setDisplayName(name);
+            try { useSessionStore.getState().setSession({ uid: firebaseUser.uid, displayName: name }); } catch (e) { /* ignore */ }
+          }
+        }, (err) => {
+          if ((global as any).__DEV__) console.warn('user snapshot error (using persisted session if available):', err);
         });
         return () => unsubscribeSnapshot();
       }

@@ -41,10 +41,15 @@ export const FormProvider: React.FC<{children: React.ReactNode}> = ({ children }
   const theme = useColorScheme() ?? 'light';
   const themeColors = Colors[theme];
   const isInitialLoad = useRef(true);
+  const seenFormIds = useRef<Set<string>>(new Set());
+  const appStartedAt = useRef<number>(Date.now());
   // Timestamp of the last navigation/segment change — used to suppress
   // transient notifications that are caused by rapid navigation (the
   // reproduction you reported: spam `enter`/`back` causing a fake toast).
   const lastSegmentsChangeRef = useRef<number>(0);
+  // In-memory per-form notification timestamps to prevent duplicate/rapid notifications
+  const notifiedTimestampsRef = useRef<Record<string, number>>({});
+  const THROTTLE_MS = 1000; // 1s throttle
 
   // Update the last-segments-change timestamp whenever the router segments change.
   useEffect(() => {
@@ -68,69 +73,91 @@ export const FormProvider: React.FC<{children: React.ReactNode}> = ({ children }
       const onSpecificFormScreen = segments.join('/').includes('forms/');
 
       if (isInitialLoad.current) {
-        setForms(newForms);
-        setLoading(false);
-        isInitialLoad.current = false;
-        return;
-      }
+          setForms(newForms);
+          setLoading(false);
+          isInitialLoad.current = false;
+          // Mark all existing forms as seen so we don't notify for them
+          seenFormIds.current = new Set(newForms.map(f => f.id));
+          return;
+        }
 
-      snapshot.docChanges().forEach(change => {
-        const docId = change.doc.id;
-        const data = change.doc.data() as ContactForm;
+        snapshot.docChanges().forEach(change => {
+          const docId = change.doc.id;
+          const data = change.doc.data() as ContactForm;
 
-        if (change.type === 'added') {
+          if (change.type !== 'added') {
+            if (change.type === 'modified') {
+              const updated = ({ ...(data as any), id: docId } as ContactForm);
+              setForms(prev => prev.map(f => (f.id === docId ? updated : f)));
+            } else if (change.type === 'removed') {
+              setForms(prev => prev.filter(f => f.id !== docId));
+            }
+            return;
+          }
+
+          // New 'added' handling: only notify when all three conditions are met
+          const createdAtMs = (data.createdAt && (data.createdAt as any).toMillis) ? (data.createdAt as any).toMillis() : Date.now();
+          const isNewAfterAppStart = createdAtMs > appStartedAt.current;
+          const wasNotSeenBefore = !seenFormIds.current.has(docId);
+          const isServerConfirmed = !change.doc.metadata.hasPendingWrites;
+
+          // Add/merge the form into local state (preserve previous replacement logic)
           const newForm = ({ ...(data as any), id: docId } as ContactForm);
           setForms(prev => {
-            // replace if already present, otherwise insert at the top (query is desc by createdAt)
             if (prev.some(f => f.id === docId)) return prev.map(f => f.id === docId ? newForm : f);
             return [newForm, ...prev];
           });
 
-          // show notification only for server-confirmed docs (not pending writes)
-          if (!change.doc.metadata.hasPendingWrites && !onFormsScreen && !onSpecificFormScreen) {
+          if (!onFormsScreen && !onSpecificFormScreen && isNewAfterAppStart && wasNotSeenBefore && isServerConfirmed) {
+            // Prevent duplicate notifications across remounts/re-renders
+            seenFormIds.current.add(docId);
+
             const now = Date.now();
             if (!shouldShowToastAfterSegmentChange(lastSegmentsChangeRef.current, now, 300)) {
               if ((global as any).__DEV__) console.debug('FormProvider: suppressed transient form toast due to recent navigation');
             } else {
-              const newFormData = data;
-              showMessage({
-                message: "Nowy Formularz",
-                description: `Od: ${newFormData.userInfo.contact}`,
-                duration: 5000,
-                onPress: () => { router.push((`/forms/${docId}`) as any); },
-                floating: true,
-                hideOnPress: true,
-                chatId: docId,
-                style: {
-                  backgroundColor: theme === 'light' ? 'rgba(242, 242, 247, 0.97)' : 'rgba(28, 28, 30, 0.97)',
-                  borderRadius: 20,
-                  marginTop: Platform.OS === 'ios' ? 40 : 20,
-                  marginHorizontal: 10,
-                  paddingVertical: 10,
-                  paddingHorizontal: 5,
-                  ...Platform.select({
-                    ios: { shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 6 },
-                    android: { elevation: 8 }
-                  })
-                },
-                titleStyle: { fontWeight: 'bold', fontSize: 15, color: themeColors.text, marginLeft: 5 },
-                textStyle: { fontSize: 13, color: themeColors.textMuted, marginLeft: 5, marginTop: 2 },
-                icon: () => (
-                  <View style={{ justifyContent: 'center', height: '100%', marginLeft: 12, marginRight: 8 }}>
-                    <Ionicons name="mail-outline" size={28} color={themeColors.tint} />
-                  </View>
-                ),
-              });
-              setLoading(false);
+              // Throttle repeated form toasts similar to ChatProvider
+              const candidateTs = createdAtMs;
+              const lastNotified = notifiedTimestampsRef.current[docId] || 0;
+              const { shouldNotify } = require('./notificationThrottle');
+              if (!shouldNotify(candidateTs, lastNotified, THROTTLE_MS)) {
+                if ((global as any).__DEV__) console.debug('FormProvider: suppressed transient form toast due to throttle');
+              } else {
+                const newFormData = data;
+                showMessage({
+                  message: "Nowy Formularz",
+                  description: `Od: ${newFormData.userInfo.contact}`,
+                  duration: 5000,
+                  onPress: () => { router.push((`/forms/${docId}`) as any); },
+                  floating: true,
+                  hideOnPress: true,
+                  chatId: docId,
+                  style: {
+                    backgroundColor: theme === 'light' ? 'rgba(242, 242, 247, 0.97)' : 'rgba(28, 28, 30, 0.97)',
+                    borderRadius: 20,
+                    marginTop: Platform.OS === 'ios' ? 40 : 20,
+                    marginHorizontal: 10,
+                    paddingVertical: 10,
+                    paddingHorizontal: 5,
+                    ...Platform.select({
+                      ios: { shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 6 },
+                      android: { elevation: 8 }
+                    })
+                  },
+                  titleStyle: { fontWeight: 'bold', fontSize: 15, color: themeColors.text, marginLeft: 5 },
+                  textStyle: { fontSize: 13, color: themeColors.textMuted, marginLeft: 5, marginTop: 2 },
+                  icon: () => (
+                    <View style={{ justifyContent: 'center', height: '100%', marginLeft: 12, marginRight: 8 }}>
+                      <Ionicons name="mail-outline" size={28} color={themeColors.tint} />
+                    </View>
+                  ),
+                });
+                notifiedTimestampsRef.current[docId] = candidateTs;
+                setLoading(false);
+              }
             }
           }
-        } else if (change.type === 'modified') {
-          const updated = ({ ...(data as any), id: docId } as ContactForm);
-          setForms(prev => prev.map(f => (f.id === docId ? updated : f)));
-        } else if (change.type === 'removed') {
-          setForms(prev => prev.filter(f => f.id !== docId));
-        }
-      });
+        });
 
     });
 

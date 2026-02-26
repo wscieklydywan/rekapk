@@ -12,6 +12,7 @@ import { deleteCollectionInBatches } from '@/lib/firestore-utils';
 import { addPendingDelete, removePendingDelete } from '@/lib/pendingDeletes';
 import toast from '@/lib/toastController';
 import { Chat, User } from '@/schemas';
+import useChatStore from '@/stores/chatStore';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { collection, deleteDoc, doc } from 'firebase/firestore';
@@ -149,6 +150,11 @@ const PERF_DEBUG = !!(global as any).__PERF_DEBUG__ || false;
 
 const ChatListItemComponent = ({ item, themeColors, filter, selectionModeRef, selectionMode = false, onSelect, onDeselect, isSelected, assignedAdmin, itemIndex = 0 }: ChatListItemProps) => {
     const router = useRouter();
+    // Guard set to prevent multiple navigations to the same chat when user taps rapidly
+    // Module-scoped Set would be shared across renders; create one on first import.
+    // eslint-disable-next-line no-undef
+    if (typeof (global as any).__navigatingChats === 'undefined') (global as any).__navigatingChats = new Set<string>();
+    const navigatingChats: Set<string> = (global as any).__navigatingChats;
     const [isPressed, setIsPressed] = useState(false);
     const _pressHandledRef = useRef(false);
 
@@ -200,12 +206,22 @@ const ChatListItemComponent = ({ item, themeColors, filter, selectionModeRef, se
         if (selectionModeRef?.current || selectionMode) {
             isSelected ? onDeselect(item.id) : onSelect(item.id);
         } else {
+            // keep visual pressed feedback; navigation happens onPress (after pressIn started preload)
+            if (navigatingChats.has(item.id)) return; // prevent duplicate
+            navigatingChats.add(item.id);
+            // safety: clear the guard after a short timeout in case navigation doesn't trigger events
+            setTimeout(() => { try { navigatingChats.delete(item.id); } catch (e) {} }, 900);
+
             setIsPressed(true);
+            console.log('ChatListItem handlePress for', item.id);
             const contactName = encodeURIComponent(item.userInfo.contact || '');
             try { hideNotificationForChat?.(item.id); } catch (e) { /* ignore */ }
             try { console.time('openChat'); } catch (e) { /* ignore */ }
             setIsPressed(false);
-            router.push((`/conversation/${item.id}?status=${item.status}&lastFilter=${filter}&contactName=${contactName}`) as any);
+            // Navigate on press (tap). Preload was started on pressIn so data should be available (or loading).
+            try { console.log('Navigating to conversation', item.id); router.push((`/conversation/${item.id}?status=${item.status}&lastFilter=${filter}&contactName=${contactName}`) as any); } catch (e) { /* ignore */ }
+            // Start non-blocking preload after navigation so the handler is not delayed.
+            try { console.log('Starting preloadChat for', item.id); useChatStore.getState().preloadChat(item.id).catch(() => {}); } catch (e) { /* ignore */ }
         }
     };
 
@@ -215,6 +231,8 @@ const ChatListItemComponent = ({ item, themeColors, filter, selectionModeRef, se
             isSelected ? onDeselect(item.id) : onSelect(item.id);
         }
     };
+
+    // removed no-op handlePressIn — preload is started on onPress instead
 
     const handleLongPress = () => {
         if (!(selectionModeRef?.current || selectionMode)) {
@@ -259,7 +277,7 @@ const ChatListItemComponent = ({ item, themeColors, filter, selectionModeRef, se
     const separatorColor = lightenHex(themeColors.border, 0.6);
 
     return (
-        <Pressable onPress={handlePress} onPressIn={handlePressInSelection} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomWidth: 0 }, (isSelected || isPressed) && { backgroundColor: themeColors.selection }]}>
+        <Pressable onPress={handlePress} onPressIn={() => { handlePressInSelection(); }} onLongPress={handleLongPress} style={[styles.itemContainer, { borderBottomWidth: 0 }, (isSelected || isPressed) && { backgroundColor: themeColors.selection }]}>
             {/* Checkbox: animated entering/exiting to match other tabs */}
             {selectionMode && (
                 <Animated.View entering={FadeIn.duration(ANIM_FADE_DURATION)} exiting={FadeOut.duration(ANIM_FADE_DURATION)} style={styles.checkboxContainer} pointerEvents={isSelected ? 'auto' : 'none'}>
@@ -954,7 +972,7 @@ const ActiveChatsScreen = () => {
                                                             />
                                                         )}
                                                         removeClippedSubviews={true}
-                                                        maxToRenderPerBatch={8}
+                                                        maxToRenderPerBatch={10}
                                                         initialNumToRender={8}
                                                         getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
                                                         windowSize={5}

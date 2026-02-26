@@ -9,6 +9,9 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import BottomToast from '@/components/BottomToast';
 import { Colors } from '@/constants/theme';
 import { initFirestoreNetworkControl } from '@/lib/FirestoreNetworkManager';
+import { initDb } from '@/lib/sqlite';
+import useChatStore from '@/stores/chatStore';
+import useSessionStore from '@/stores/sessionStore';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -49,11 +52,13 @@ const InitialLayout = () => {
   }, []);
 
   useEffect(() => {
-    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(async response => {
       const data = response.notification.request.content.data;
       if (data && data.chatId) {
         try { hideNotificationForChat(data.chatId); } catch (e) { /* ignore */ }
-        router.push((`/conversation/${data.chatId}`) as any);
+        // Navigate immediately, then start preload in background to avoid blocking the handler.
+        try { router.push((`/conversation/${data.chatId}`) as any); } catch (e) { /* ignore */ }
+        try { useChatStore.getState().preloadChat(data.chatId).catch(() => {}); } catch (e) { /* ignore */ }
       } else if (data && data.formId) {
         router.push((`/forms/${data.formId}`) as any);
       }
@@ -63,13 +68,14 @@ const InitialLayout = () => {
 
   return (
     // Keep root Stack mounted so Android does not detach inactive screens.
-    <Stack screenOptions={{ detachInactiveScreens: false, freezeOnBlur: false, headerShown: false } as any} />
+    <Stack screenOptions={{ detachInactiveScreens: false, freezeOnBlur: false, headerShown: false, animation: 'fade' } as any} />
   );
 };
 
 const RootLayout = () => {
   const scheme = useColorScheme() ?? 'light';
   const themeColors = Colors[scheme];
+  const isSessionHydrated = useSessionStore((state: any) => state.isHydrated);
 
   useEffect(() => {
     if (Platform.OS === 'android' && NavigationBar && typeof NavigationBar.setBackgroundColorAsync === 'function') {
@@ -88,6 +94,8 @@ const RootLayout = () => {
     // Initialize Firestore network control to disable retries when real internet is gone
     try { initFirestoreNetworkControl(); } catch (e) { /* ignore */ }
   }, []);
+  // Kick off SQLite initialization early (fire-and-forget) to avoid cold-start delays later
+  useEffect(() => { try { initDb().catch(() => {}); } catch (e) { /* ignore */ } }, []);
   // sonnerBridge removed per request; no bridge registration
 
   return (
@@ -102,13 +110,16 @@ const RootLayout = () => {
                   <SafeAreaProvider>
                     <KeyboardProvider>
                       <SafeAreaView style={{ flex: 1, backgroundColor: themeColors.background }} edges={[ 'left', 'right' ]}>
-                        { (global as any).__DEV__ ? (
-                          <DebugProvider>
+                        {(() => {
+                          if (!isSessionHydrated) return null;
+                          return (global as any).__DEV__ ? (
+                            <DebugProvider>
+                              <InitialLayout />
+                            </DebugProvider>
+                          ) : (
                             <InitialLayout />
-                          </DebugProvider>
-                        ) : (
-                          <InitialLayout />
-                        ) }
+                          );
+                        })()}
                       </SafeAreaView>
                     </KeyboardProvider>
                   </SafeAreaProvider>

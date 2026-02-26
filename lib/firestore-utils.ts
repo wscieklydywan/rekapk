@@ -1,4 +1,4 @@
-import { CollectionReference, Firestore, getDocs, limit, query, writeBatch } from 'firebase/firestore';
+import { CollectionReference, Firestore, getDocs, limit, query, writeBatch, WriteBatch } from 'firebase/firestore';
 
 /**
  * Safely deletes all documents in a collection in batches (avoids 500-op limit).
@@ -31,7 +31,7 @@ export async function deleteCollectionInBatches(
     const batch = _writeBatch(db as any);
     snap.docs.forEach((d: any) => batch.delete(d.ref));
 
-    await batch.commit();
+    await commitBatchWithRetries(batch as WriteBatch);
 
     totalDeleted += snap.size;
 
@@ -43,4 +43,29 @@ export async function deleteCollectionInBatches(
   }
 
   return totalDeleted;
+}
+
+/**
+ * Commit a WriteBatch with simple retry logic on transient/precondition failures.
+ * Retries when the error code contains 'failed-precondition' up to `maxRetries`.
+ */
+export async function commitBatchWithRetries(batch: WriteBatch, maxRetries = 3): Promise<void> {
+  let attempt = 0;
+  while (true) {
+    try {
+      await batch.commit();
+      return;
+    } catch (err: any) {
+      attempt++;
+      const codeStr = (err && (err.code || err.status || err.message) || '').toString();
+      if (attempt > maxRetries) throw err;
+      // Retry on failed-precondition which often indicates a write conflict.
+      if (codeStr.includes('failed-precondition')) {
+        const delay = 150 * Math.pow(2, attempt); // exponential backoff base
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
 }

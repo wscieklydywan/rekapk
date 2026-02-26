@@ -1,8 +1,8 @@
 
-import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
-import * as firebaseAuth from "firebase/auth";
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { initializeApp } from "firebase/app";
+import * as firebaseAuth from "firebase/auth";
+import { getFirestore, initializeFirestore, persistentLocalCache } from "firebase/firestore";
 import { Platform } from 'react-native';
 
 // Your web app's Firebase configuration
@@ -26,7 +26,19 @@ const auth = firebaseAuth.initializeAuth(app, {
     : (firebaseAuth as any).getReactNativePersistence(AsyncStorage)
 });
 
-const db = getFirestore(app);
+let db: any;
+try {
+  // Try to initialize Firestore with a persistent local cache where available.
+  // This improves offline stability and lets the SDK manage reconnects more robustly.
+  if (typeof initializeFirestore === 'function' && typeof persistentLocalCache === 'function') {
+    db = initializeFirestore(app, { localCache: persistentLocalCache() });
+  } else {
+    db = getFirestore(app);
+  }
+} catch (e) {
+  console.warn('Failed to initialize persistent local cache for Firestore, falling back to getFirestore', e);
+  db = getFirestore(app);
+}
 
 // Export them for use in other parts of your app
 export { auth, db };

@@ -1,9 +1,9 @@
 
+import { useFormContext } from '@/app/contexts/FormProvider';
+import { Colors } from '@/constants/theme';
+import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { View, useColorScheme } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { Colors } from '@/constants/theme';
-import { useFormContext } from '@/app/contexts/FormProvider';
 
 const Badge = () => {
   const theme = useColorScheme() ?? 'light';

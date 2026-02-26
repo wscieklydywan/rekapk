@@ -3,7 +3,9 @@ import { Colors } from '@/constants/theme';
 import { useChats } from '@/hooks/useChats';
 import { db } from '@/lib/firebase';
 import { showMessage } from '@/lib/showMessage';
+import sqlite from '@/lib/sqlite';
 import { Chat, User } from '@/schemas';
+import useChatStore from '@/stores/chatStore';
 import { Ionicons } from '@expo/vector-icons';
 import { useGlobalSearchParams, useRouter, useSegments } from 'expo-router';
 import { collection, getDocs, query, where } from 'firebase/firestore';
@@ -92,7 +94,7 @@ export const ChatProvider: React.FC<{children: React.ReactNode}> = ({ children }
                     message: `Nowy czat od ${currentChat.userInfo.contact}`,
                     description: currentChat.lastMessage ?? '',
                     duration: 5000,
-                    onPress: () => { router.push((`/conversation/${currentChat.id}`) as any); },
+              onPress: async () => { try { router.push((`/conversation/${currentChat.id}`) as any); } catch (e) { /* ignore */ } try { useChatStore.getState().openChat(currentChat.id).catch(() => {}); } catch (e) { /* ignore */ } },
                     floating: true,
                     hideOnPress: true,
                     chatId: currentChat.id,
@@ -120,6 +122,27 @@ export const ChatProvider: React.FC<{children: React.ReactNode}> = ({ children }
             }
         }
 
+          // Persist lastMessage to SQLite for fast cold-open later
+          try {
+            const lm = currentChat.lastMessage;
+            const lmTs = currentChat.lastMessageTimestamp && currentChat.lastMessageTimestamp.toMillis ? currentChat.lastMessageTimestamp.toMillis() : (currentChat.createdAt && currentChat.createdAt.toMillis ? currentChat.createdAt.toMillis() : Date.now());
+            if (lm) {
+              const pseudoId = `last_${currentChat.id}_${lmTs}`;
+              // fire-and-forget upsert to SQLite
+              sqlite.upsertMessages([{
+                id: pseudoId,
+                chatId: currentChat.id,
+                text: lm,
+                sender: (currentChat.lastMessageSender as any) || 'user',
+                adminId: null,
+                createdAt: lmTs,
+                pending: 0,
+                failed: 0,
+                extra: null
+              }]).catch((e: any) => { /* ignore */ });
+            }
+          } catch (e) { /* ignore */ }
+
         return;
       }
 
@@ -142,7 +165,7 @@ export const ChatProvider: React.FC<{children: React.ReactNode}> = ({ children }
                 message: `Wiadomość od ${currentChat.userInfo.contact}`,
                 description: currentChat.lastMessage,
                 duration: 5000,
-                onPress: () => { router.push((`/conversation/${currentChat.id}`) as any); },
+                  onPress: async () => { try { router.push((`/conversation/${currentChat.id}`) as any); } catch (e) { /* ignore */ } try { useChatStore.getState().openChat(currentChat.id).catch(() => {}); } catch (e) { /* ignore */ } },
                 floating: true,
                 hideOnPress: true,
                 chatId: currentChat.id,
@@ -169,6 +192,28 @@ export const ChatProvider: React.FC<{children: React.ReactNode}> = ({ children }
             notifiedTimestampsRef.current[currentChat.id] = candidateTs;
         }
       }
+
+      // Persist lastMessage (if advanced) to SQLite for fast cold-open later
+      try {
+        if (lastMessageAdvanced) {
+          const lm = currentChat.lastMessage;
+          const lmTs = currentChat.lastMessageTimestamp && currentChat.lastMessageTimestamp.toMillis ? currentChat.lastMessageTimestamp.toMillis() : (currentChat.createdAt && currentChat.createdAt.toMillis ? currentChat.createdAt.toMillis() : Date.now());
+          if (lm) {
+            const pseudoId = `last_${currentChat.id}_${lmTs}`;
+            sqlite.upsertMessages([{
+              id: pseudoId,
+              chatId: currentChat.id,
+              text: lm,
+              sender: (currentChat.lastMessageSender as any) || 'user',
+              adminId: null,
+              createdAt: lmTs,
+              pending: 0,
+              failed: 0,
+              extra: null
+            }]).catch((e: any) => { /* ignore */ });
+          }
+        }
+      } catch (e) { /* ignore */ }
     });
   }, [chats, prevChats, loading, appEnteredAt, segments, chatIdFromParams, router, theme, themeColors]);
 
