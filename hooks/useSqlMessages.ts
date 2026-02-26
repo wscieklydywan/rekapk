@@ -1,6 +1,6 @@
 import { db } from '@/lib/firebase';
 import { deleteMessage, getMessages, getMessagesByIds, initDb, insertPendingMessage, upsertMessages } from '@/lib/sqlite';
-import { addDoc, collection, onSnapshot, orderBy, query, serverTimestamp } from 'firebase/firestore';
+import { addDoc, collection, onSnapshot, orderBy, query, serverTimestamp } from '@/lib/firebase';
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from './useAuth';
 
@@ -28,7 +28,7 @@ export const useSqlMessages = (chatId: string, pageSize = 50) => {
     const messagesCollection = collection(db, 'chats', chatId, 'messages');
     const q = query(messagesCollection, orderBy('createdAt', 'asc'));
 
-    const unsubscribe = onSnapshot(q, async (snap) => {
+    const unsubscribe = onSnapshot(q, async (snap: any) => {
       try {
         const changes = snap.docChanges();
         if (!changes || changes.length === 0) return;
@@ -75,7 +75,7 @@ export const useSqlMessages = (chatId: string, pageSize = 50) => {
       } catch (e) {
         console.error('sync error', e);
       }
-    }, (err) => { console.error('onSnapshot err', err); });
+    }, (err: any) => { console.error('onSnapshot err', err); });
 
     unsubRef.current = () => unsubscribe();
     return () => { try { unsubRef.current && unsubRef.current(); } catch(e){} };

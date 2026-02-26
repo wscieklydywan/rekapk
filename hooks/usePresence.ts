@@ -2,7 +2,7 @@
 
 import { useEffect, useCallback } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc } from '@/lib/firebase';
 import { useAuth } from './useAuth';
 import { db } from '@/lib/firebase';
 

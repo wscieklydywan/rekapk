@@ -1,7 +1,5 @@
 
-import { db } from '@/lib/firebase';
-import type { Timestamp } from 'firebase/firestore';
-import { collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore';
+import { db, collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc, Timestamp } from '@/lib/firebase';
 import { useEffect, useState } from 'react';
 
 interface ContactMessage {
@@ -19,8 +17,8 @@ export const useContactMessages = () => {
     const messagesCollection = collection(db, 'contact_messages');
     const q = query(messagesCollection, orderBy('timestamp', 'asc'));
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const messagesData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })) as ContactMessage[];
+    const unsubscribe = onSnapshot(q, (snapshot: any) => {
+      const messagesData = snapshot.docs.map((doc: any) => ({ ...doc.data(), id: doc.id })) as ContactMessage[];
       setMessages(messagesData);
     });
 

@@ -15,7 +15,7 @@ import { Chat, User } from '@/schemas';
 import useChatStore from '@/stores/chatStore';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { collection, deleteDoc, doc } from 'firebase/firestore';
+import { collection, deleteDoc, doc } from '@/lib/firebase';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, FlatList, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { Gesture, GestureDetector, NativeViewGestureHandler } from 'react-native-gesture-handler';

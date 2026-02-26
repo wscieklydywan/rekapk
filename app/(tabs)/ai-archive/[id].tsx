@@ -7,7 +7,7 @@ import { deleteCollectionInBatches } from '@/lib/firestore-utils';
 import toast from '@/lib/toastController';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { collection, deleteDoc, doc, getDoc, getDocs, query } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, query } from '@/lib/firebase';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { TouchableOpacity } from 'react-native-gesture-handler';

@@ -8,7 +8,7 @@ import toast from '@/lib/toastController';
 import { ContactForm, FormMessage } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc } from '@/lib/firebase';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import Animated, { Easing, FadeIn, FadeOut, SlideInRight, SlideOutRight } from 'react-native-reanimated';
@@ -76,7 +76,7 @@ const FormDetailScreen = () => {
         if (!formId) return;
         
         const formRef = doc(db, 'contact_forms', formId);
-        const unsubForm = onSnapshot(formRef, async (docSnapshot) => {
+        const unsubForm = onSnapshot(formRef, async (docSnapshot: any) => {
             if (docSnapshot.exists()) {
                 const formData = { id: docSnapshot.id, ...docSnapshot.data() } as ContactForm;
                 setForm(formData);
@@ -91,8 +91,8 @@ const FormDetailScreen = () => {
         });
 
         const messagesQuery = query(collection(db, 'contact_forms', formId, 'messages'), orderBy('createdAt', 'asc'));
-        const unsubMessages = onSnapshot(messagesQuery, (snapshot) => {
-            setMessages(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as FormMessage)));
+        const unsubMessages = onSnapshot(messagesQuery, (snapshot: any) => {
+            setMessages(snapshot.docs.map((doc: any) => ({ ...doc.data(), id: doc.id } as FormMessage)));
             setLoading(false);
         });
 

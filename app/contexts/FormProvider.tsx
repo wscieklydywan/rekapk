@@ -6,7 +6,7 @@ import { showMessage } from '@/lib/showMessage';
 import { ContactForm } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useSegments } from 'expo-router';
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { collection, onSnapshot, orderBy, query } from '@/lib/firebase';
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, View, useColorScheme } from 'react-native';
 

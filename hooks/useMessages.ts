@@ -1,7 +1,7 @@
 
 import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, Timestamp, getDocs, limit } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, Timestamp, getDocs, limit } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
 import { Message } from '@/schemas';
 
@@ -19,7 +19,7 @@ export const useMessages = (chatId: string) => {
       const messagesCollection = collection(db, 'chats', chatId, 'messages');
       const q = query(messagesCollection, orderBy('createdAt', 'asc'));
       const historySnapshot = await getDocs(q);
-      const history = historySnapshot.docs.map(doc => ({
+      const history = historySnapshot.docs.map((doc: any) => ({
         id: doc.id,
         ...doc.data()
       } as Message));
@@ -31,8 +31,8 @@ export const useMessages = (chatId: string) => {
     const messagesCollection = collection(db, 'chats', chatId, 'messages');
     const q = query(messagesCollection, orderBy('createdAt', 'desc'), limit(1));
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach(change => {
+    const unsubscribe = onSnapshot(q, (snapshot: any) => {
+      snapshot.docChanges().forEach((change: any) => {
         if (change.type === 'added') {
           const docData = change.doc.data();
           const newMessage: Message = {
@@ -50,7 +50,7 @@ export const useMessages = (chatId: string) => {
           });
         }
       });
-    }, (error) => {
+    }, (error: any) => {
       console.error("Error fetching messages: ", error);
     });
 

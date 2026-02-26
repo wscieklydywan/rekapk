@@ -1,7 +1,6 @@
 
 import { useState } from 'react';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { createUserWithEmailAndPassword, auth } from '@/lib/firebase';
 import { Alert } from 'react-native';
 
 export const useCreateUser = () => {

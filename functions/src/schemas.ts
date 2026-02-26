@@ -1,5 +1,5 @@
 
-import { Timestamp } from 'firebase/firestore';
+type Timestamp = any;
 
 export interface UserInfo {
     contact: string;

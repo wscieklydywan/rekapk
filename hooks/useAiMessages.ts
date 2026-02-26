@@ -1,7 +1,7 @@
 
 import { db } from '@/lib/firebase';
 import { Message } from '@/schemas';
-import { addDoc, collection, onSnapshot, orderBy, query, serverTimestamp } from 'firebase/firestore';
+import { addDoc, collection, onSnapshot, orderBy, query, serverTimestamp } from '@/lib/firebase';
 import { useEffect, useState } from 'react';
 
 export const useAiMessages = (chatId: string) => {

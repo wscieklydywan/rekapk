@@ -1,4 +1,5 @@
-import { CollectionReference, Firestore, getDocs, limit, query, writeBatch, WriteBatch } from 'firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import { getDocs, limit, query, writeBatch } from '@/lib/firebase';
 
 /**
  * Safely deletes all documents in a collection in batches (avoids 500-op limit).
@@ -8,8 +9,8 @@ import { CollectionReference, Firestore, getDocs, limit, query, writeBatch, Writ
  * Returns number of deleted documents.
  */
 export async function deleteCollectionInBatches(
-  db: Firestore,
-  collectionRef: CollectionReference,
+  db: FirebaseFirestoreTypes.Module,
+  collectionRef: FirebaseFirestoreTypes.CollectionReference,
   batchSize = 400,
   opts?: {
     getDocsFn?: typeof getDocs;
@@ -31,7 +32,7 @@ export async function deleteCollectionInBatches(
     const batch = _writeBatch(db as any);
     snap.docs.forEach((d: any) => batch.delete(d.ref));
 
-    await commitBatchWithRetries(batch as WriteBatch);
+    await commitBatchWithRetries(batch as FirebaseFirestoreTypes.WriteBatch);
 
     totalDeleted += snap.size;
 
@@ -49,7 +50,7 @@ export async function deleteCollectionInBatches(
  * Commit a WriteBatch with simple retry logic on transient/precondition failures.
  * Retries when the error code contains 'failed-precondition' up to `maxRetries`.
  */
-export async function commitBatchWithRetries(batch: WriteBatch, maxRetries = 3): Promise<void> {
+export async function commitBatchWithRetries(batch: FirebaseFirestoreTypes.WriteBatch, maxRetries = 3): Promise<void> {
   let attempt = 0;
   while (true) {
     try {

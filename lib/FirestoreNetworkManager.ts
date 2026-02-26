@@ -1,5 +1,5 @@
 import NetInfo from '@react-native-community/netinfo';
-import { disableNetwork, enableNetwork } from 'firebase/firestore';
+import { disableNetwork, enableNetwork } from '@/lib/firebase';
 import { db } from './firebase';
 
 let networkDisabled = false;

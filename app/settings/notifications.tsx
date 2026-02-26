@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
 import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
-import { doc, getFirestore, onSnapshot, updateDoc } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, db as firestoreDb } from '@/lib/firebase';
 import React, { useEffect, useState } from 'react';
 import { AppState, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -23,7 +23,7 @@ const NotificationsScreen = () => {
   const headerBase = 64;
   const headerHeight = headerBase + insets.top;
   const { user } = useAuth();
-  const db = getFirestore();
+  const db = firestoreDb;
 
   const [granted, setGranted] = useState<boolean | null>(null);
   const [notificationMode, setNotificationMode] = useState<'assigned' | 'all'>('assigned');
@@ -48,7 +48,7 @@ const NotificationsScreen = () => {
   useEffect(() => {
     if (!user) return;
     const uref = doc(db, 'users', user.uid);
-    const unsub = onSnapshot(uref, snap => {
+    const unsub = onSnapshot(uref, (snap: any) => {
       if (!snap.exists()) return;
       const data = snap.data() as any;
       setNotificationMode(data.notificationSettings?.mode || 'assigned');

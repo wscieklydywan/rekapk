@@ -1,6 +1,5 @@
 
-import { db } from '@/lib/firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { db, doc, setDoc } from '@/lib/firebase';
 import { useEffect } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import { useAuth } from './useAuth';

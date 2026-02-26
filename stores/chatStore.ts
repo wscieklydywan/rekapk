@@ -2,7 +2,7 @@ import { db } from '@/lib/firebase';
 import sqlite from '@/lib/sqlite';
 import { Message } from '@/schemas';
 import NetInfo from '@react-native-community/netinfo';
-import { collection, doc, getDocs, increment, limit, onSnapshot, orderBy, query, serverTimestamp, startAfter, Timestamp, writeBatch } from 'firebase/firestore';
+import { collection, doc, getDocs, increment, limit, onSnapshot, orderBy, query, serverTimestamp, startAfter, Timestamp, writeBatch } from '@/lib/firebase';
 import { create } from 'zustand';
 
 type ChatState = {
@@ -61,7 +61,7 @@ export const useChatStore = create<ChatState>((set: any, get: any) => ({
             console.log('onSnapshot callback for', chatId, 'SNAPSHOT size:', snap.size);
             try {
               try {
-                const ids = snap.docs.map(d => d.id);
+                    const ids = snap.docs.map((d: any) => d.id);
                 console.log('onSnapshot docs ids sample:', ids.slice(0,5));
                 if (snap.docs[0]) {
                   try { console.debug('onSnapshot first doc data sample:', snap.docs[0].data()); } catch (e) { /* ignore */ }

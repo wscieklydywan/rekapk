@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { db } from '@/lib/firebase';
 import { deleteCollectionInBatches } from '@/lib/firestore-utils';
-import { collection, deleteDoc, doc } from 'firebase/firestore';
+import { collection, deleteDoc, doc } from '@/lib/firebase';
 
 const categoryTranslations: { [key: string]: string } = {
     'websites': 'Strony Internetowe',

@@ -9,7 +9,7 @@ import { db } from '@/lib/firebase';
 import { deleteCollectionInBatches } from '@/lib/firestore-utils';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRouter } from 'expo-router';
-import { collection, deleteDoc, doc, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { collection, deleteDoc, doc, onSnapshot, orderBy, query } from '@/lib/firebase';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -297,11 +297,11 @@ const AiArchiveScreen = () => {
 
     useEffect(() => {
         const q = query(collection(db, 'ai_conversations'), orderBy('lastActivity', 'desc'));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const convs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AiConversation));
+        const unsubscribe = onSnapshot(q, (snapshot: any) => {
+            const convs = (snapshot.docs as any[]).map((doc: any) => ({ id: doc.id, ...(doc.data ? doc.data() : {}) } as AiConversation));
             setAllConversations(convs);
             setLoading(false);
-        }, (error) => { console.error("Błąd AI:", error); setLoading(false); });
+        }, (error: any) => { console.error("Błąd AI:", error); setLoading(false); });
         return () => unsubscribe();
     }, []);
 

@@ -1,7 +1,6 @@
 
-import { db } from '@/lib/firebase';
+import { db, collection, getDocs } from '@/lib/firebase';
 import { User } from '@/schemas';
-import { collection, getDocs } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
 
 export const useAdmins = () => {

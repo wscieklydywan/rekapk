@@ -4,7 +4,7 @@ import { auth } from '@/lib/firebase';
 import toast from '@/lib/toastController';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword } from '@/lib/firebase';
 import { useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
 

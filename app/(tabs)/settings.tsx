@@ -6,8 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useLightBars } from '@/hooks/useSystemBars';
 import { Ionicons } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
-import { getAuth, signOut } from 'firebase/auth';
-import { doc, getFirestore, onSnapshot, updateDoc } from 'firebase/firestore';
+import { auth, signOut, doc, onSnapshot, updateDoc, db as firestoreDb } from '@/lib/firebase';
 import React, { useEffect, useMemo, useState } from 'react';
 import { AppState, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -64,8 +63,8 @@ const SettingsScreen = () => {
   const insets = useSafeAreaInsets();
   const headerBase = 64;
   const headerHeight = headerBase + insets.top;
-  const auth = getAuth();
-  const db = getFirestore();
+  const authClient = auth;
+  const db = firestoreDb;
 
 
   const [notificationStatus, setNotificationStatus] = useState<boolean | null>(null);
@@ -115,7 +114,7 @@ const SettingsScreen = () => {
 
   const handleLogout = () => {
     setLogoutModalVisible(false);
-    signOut(auth).catch(error => console.error("Logout Error: ", error));
+    signOut(authClient).catch(error => console.error("Logout Error: ", error));
   };
 
   const handleModeUpdate = async (newMode: string) => {

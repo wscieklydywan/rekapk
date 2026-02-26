@@ -2,7 +2,7 @@ import { db } from '@/lib/firebase';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc } from '@/lib/firebase';
 import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import { useAuth } from './useAuth';

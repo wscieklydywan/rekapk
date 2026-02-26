@@ -1,7 +1,7 @@
 import { Message, User } from '@/schemas';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
-import { Timestamp } from 'firebase/firestore';
+import { Timestamp } from '@/lib/firebase';
 import React, { useEffect, useMemo, useRef } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 

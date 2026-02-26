@@ -2,7 +2,7 @@ import { Colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/useAuth';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { doc, getDoc, getFirestore, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, db as firestoreDb } from '@/lib/firebase';
 import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,7 +15,7 @@ const AccountScreen = () => {
   const headerBase = 64;
   const headerHeight = headerBase + insets.top;
   const router = useRouter();
-  const db = getFirestore();
+  const db = firestoreDb;
   const [displayName, setDisplayName] = useState(user?.displayName || '');
   const [saving, setSaving] = useState(false);
 

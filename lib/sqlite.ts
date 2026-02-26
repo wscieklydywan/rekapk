@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { Timestamp } from 'firebase/firestore';
+import { Timestamp } from '@/lib/firebase';
 
 const DB_NAME = 'rekapk.db';
 

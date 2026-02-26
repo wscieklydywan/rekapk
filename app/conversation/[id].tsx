@@ -11,7 +11,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { collection, deleteDoc, doc, increment, onSnapshot, runTransaction, Timestamp, updateDoc, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc, increment, onSnapshot, runTransaction, Timestamp, updateDoc, writeBatch } from '@/lib/firebase';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, FlatList, Image, Modal, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, useColorScheme, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';

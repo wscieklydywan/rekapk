@@ -4,7 +4,7 @@ import { db } from '@/lib/firebase';
 import { isPendingDelete } from '@/lib/pendingDeletes';
 import sqlite from '@/lib/sqlite';
 import { Chat } from '@/schemas';
-import { collection, deleteDoc, doc, getDocs, limit, onSnapshot, orderBy, query, startAfter, updateDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDocs, limit, onSnapshot, orderBy, query, startAfter, updateDoc } from '@/lib/firebase';
 import { useEffect, useRef, useState } from 'react';
 
 export const useChats = ({ pageSize = 30 }: { pageSize?: number } = {}) => {
@@ -51,8 +51,8 @@ export const useChats = ({ pageSize = 30 }: { pageSize?: number } = {}) => {
         limit(pageSize)
       );
 
-      unsub = onSnapshot(q, (snapshot) => {
-        const snapshotChats = snapshot.docs.map(docSnap => {
+      unsub = onSnapshot(q, (snapshot: any) => {
+        const snapshotChats = snapshot.docs.map((docSnap: any) => {
           const data = docSnap.data();
           return {
             id: docSnap.id,

@@ -8,7 +8,7 @@ import { Chat, User } from '@/schemas';
 import useChatStore from '@/stores/chatStore';
 import { Ionicons } from '@expo/vector-icons';
 import { useGlobalSearchParams, useRouter, useSegments } from 'expo-router';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs, query, where } from '@/lib/firebase';
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, useColorScheme, View } from 'react-native';
 import { useSession } from './SessionContext';
